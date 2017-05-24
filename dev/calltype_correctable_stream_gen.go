@@ -123,8 +123,12 @@ func (c *Configuration) readCorrectableStream(ctx context.Context, a *ReadReques
 	replyChan := make(chan internalState, expected)
 	for _, n := range c.nodes {
 		node := n // Bind node to current n as n has changed when the function is actually executed.
-		n.rpcs <- func() {
+		select {
+		case n.rpcs <- func() {
 			callGRPCReadCorrectableStream(ctx, node, a, replyChan)
+		}:
+		default:
+			go callGRPCReadCorrectableStream(ctx, node, a, replyChan)
 		}
 	}
 

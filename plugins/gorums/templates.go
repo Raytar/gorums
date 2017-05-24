@@ -97,13 +97,21 @@ func (c *Configuration) {{.UnexportedMethodName}}(ctx context.Context, a *{{.FQR
       continue
     }
     node := n // Bind node to current n as n has changed when the function is actually executed.
-    n.rpcs <- func() {
+    select {
+    case n.rpcs <- func() {
       callGRPC{{.MethodName}}(ctx, node, nodeArg, replyChan)
+    }:
+    default:
+      go callGRPC{{.MethodName}}(ctx, node, nodeArg, replyChan)
     }
 {{- else}}
     node := n // Bind node to current n as n has changed when the function is actually executed.
-    n.rpcs <- func() {
+    select {
+    case n.rpcs <- func() {
       callGRPC{{.MethodName}}(ctx, node, a, replyChan)
+    }:
+    default:
+      go callGRPC{{.MethodName}}(ctx, node, a, replyChan)
     }
 {{end -}}
   }
@@ -892,7 +900,9 @@ func (n *Node) close() error {
 		}
     	return fmt.Errorf("%d: conn close error: %v", n.id, err)
     }
-	close(n.rpcs)
+	if n.rpcs != nil {
+	   close(n.rpcs)
+	}
 	return nil
 }
 `

@@ -234,10 +234,12 @@ func (m *Manager) createNode(addr string) (*Node, error) {
 		addr:		tcpAddr.String(),
 		latency:	-1 * time.Second,
 		logger:		m.logger,
-		rpcs:		make(chan func(), 4096),
 	}
 
-	go node.orderRPCs()
+	if m.opts.order {
+		node.rpcs = make(chan func(), 4096)
+		go node.orderRPCs()
+	}
 
 	return node, nil
 }
@@ -601,6 +603,7 @@ type managerOptions struct {
 	logger		*log.Logger
 	noConnect	bool
 	trace		bool
+	order		bool
 }
 
 // ManagerOption provides a way to set different options on a new Manager.
@@ -644,6 +647,14 @@ func WithNoConnect() ManagerOption {
 func WithTracing() ManagerOption {
 	return func(o *managerOptions) {
 		o.trace = true
+	}
+}
+
+// WithNodeOrdering controls whether Gorums should force RPCs to be sent (per
+// node) in the order their parent quorum call were invoked.
+func WithNodeOrdering() ManagerOption {
+	return func(o *managerOptions) {
+		o.order = true
 	}
 }
 

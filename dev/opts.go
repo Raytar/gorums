@@ -13,6 +13,7 @@ type managerOptions struct {
 	logger          *log.Logger
 	noConnect       bool
 	trace           bool
+	order           bool
 }
 
 // ManagerOption provides a way to set different options on a new Manager.
@@ -56,5 +57,13 @@ func WithNoConnect() ManagerOption {
 func WithTracing() ManagerOption {
 	return func(o *managerOptions) {
 		o.trace = true
+	}
+}
+
+// WithNodeOrdering controls whether Gorums should force RPCs to be sent (per
+// node) in the order their parent quorum call were invoked.
+func WithNodeOrdering() ManagerOption {
+	return func(o *managerOptions) {
+		o.order = true
 	}
 }

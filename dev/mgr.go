@@ -96,10 +96,12 @@ func (m *Manager) createNode(addr string) (*Node, error) {
 		addr:    tcpAddr.String(),
 		latency: -1 * time.Second,
 		logger:  m.logger,
-		rpcs:    make(chan func(), 4096),
 	}
 
-	go node.orderRPCs()
+	if m.opts.order {
+		node.rpcs = make(chan func(), 4096)
+		go node.orderRPCs()
+	}
 
 	return node, nil
 }
