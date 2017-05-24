@@ -8,74 +8,74 @@ const calltype_common_definitions_tmpl = `{{/* Remember to run 'make dev' after 
 
 {{define "callGRPC"}}
 func callGRPC{{.MethodName}}(ctx context.Context, node *Node, arg *{{.FQReqName}}, replyChan chan<- {{.UnexportedTypeName}}) {
-	reply := new({{.FQRespName}})
-	start := time.Now()
-	err := grpc.Invoke(
-		ctx,
-		"/{{.ServPackageName}}.{{.ServName}}/{{.MethodName}}",
-		arg,
-		reply,
-		node.conn,
-	)
-	s, ok := status.FromError(err)
-	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
-		node.setLatency(time.Since(start))
-	} else {
-		node.setLastErr(err)
-	}
-	replyChan <- {{.UnexportedTypeName}}{node.id, reply, err}
+    reply := new({{.FQRespName}})
+    start := time.Now()
+    err := grpc.Invoke(
+        ctx,
+        "/{{.ServPackageName}}.{{.ServName}}/{{.MethodName}}",
+        arg,
+        reply,
+        node.conn,
+    )
+    s, ok := status.FromError(err)
+    if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
+        node.setLatency(time.Since(start))
+    } else {
+        node.setLastErr(err)
+    }
+    replyChan <- {{.UnexportedTypeName}}{node.id, reply, err}
 }
 {{end}}
 
 {{define "trace"}}
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "{{.MethodName}}")
-		defer ti.Finish()
+    var ti traceInfo
+    if c.mgr.opts.trace {
+        ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "{{.MethodName}}")
+        defer ti.Finish()
 
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: a}, false)
+        ti.firstLine.cid = c.id
+        if deadline, ok := ctx.Deadline(); ok {
+            ti.firstLine.deadline = time.Until(deadline)
+        }
+        ti.LazyLog(&ti.firstLine, false)
+        ti.LazyLog(&payload{sent: true, msg: a}, false)
 
-		defer func() {
-			ti.LazyLog(&qcresult{
-				ids:   resp.NodeIDs,
-				reply: resp.{{.CustomRespName}},
-				err:   resp.err,
-			}, false)
-			if resp.err != nil {
-				ti.SetError()
-			}
-		}()
-	}
+        defer func() {
+            ti.LazyLog(&qcresult{
+                ids:   resp.NodeIDs,
+                reply: resp.{{.CustomRespName}},
+                err:   resp.err,
+            }, false)
+            if resp.err != nil {
+                ti.SetError()
+            }
+        }()
+    }
 {{end}}
 
 {{define "simple_trace"}}
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "{{.MethodName}}")
-		defer ti.Finish()
+    var ti traceInfo
+    if c.mgr.opts.trace {
+        ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "{{.MethodName}}")
+        defer ti.Finish()
 
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: a}, false)
+        ti.firstLine.cid = c.id
+        if deadline, ok := ctx.Deadline(); ok {
+            ti.firstLine.deadline = time.Until(deadline)
+        }
+        ti.LazyLog(&ti.firstLine, false)
+        ti.LazyLog(&payload{sent: true, msg: a}, false)
 
-		defer func() {
-			ti.LazyLog(&qcresult{
-				reply: resp,
-				err:   err,
-			}, false)
-			if err != nil {
-				ti.SetError()
-			}
-		}()
-	}
+        defer func() {
+            ti.LazyLog(&qcresult{
+                reply: resp,
+                err:   err,
+            }, false)
+            if err != nil {
+                ti.SetError()
+            }
+        }()
+    }
 {{end}}
 
 {{define "unexported_method_signature"}}
@@ -96,9 +96,15 @@ func (c *Configuration) {{.UnexportedMethodName}}(ctx context.Context, a *{{.FQR
       expected--
       continue
     }
-    go callGRPC{{.MethodName}}(ctx, n, nodeArg, replyChan)
+    node := n // Bind node to current n as n has changed when the function is actually executed.
+    n.rpcs <- func() {
+      callGRPC{{.MethodName}}(ctx, node, nodeArg, replyChan)
+    }
 {{- else}}
-    go callGRPC{{.MethodName}}(ctx, n, a, replyChan)
+    node := n // Bind node to current n as n has changed when the function is actually executed.
+    n.rpcs <- func() {
+      callGRPC{{.MethodName}}(ctx, node, a, replyChan)
+    }
 {{end -}}
   }
 {{end}}
@@ -831,6 +837,7 @@ type Node struct {
 	addr	string
 	conn	*grpc.ClientConn
 	logger	*log.Logger
+	rpcs chan func()
 
 {{range .Clients}}
 	{{.}} {{.}}
@@ -885,6 +892,7 @@ func (n *Node) close() error {
 		}
     	return fmt.Errorf("%d: conn close error: %v", n.id, err)
     }
+	close(n.rpcs)
 	return nil
 }
 `

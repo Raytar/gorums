@@ -35,6 +35,12 @@ func (n *Node) Port() string {
 	return nilAngleString
 }
 
+func (n *Node) orderRPCs() {
+	for f := range n.rpcs {
+		f()
+	}
+}
+
 func (n *Node) String() string {
 	if n != nil {
 		return fmt.Sprintf("addr: %s", n.addr)

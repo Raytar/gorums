@@ -125,7 +125,10 @@ func (c *Configuration) readCorrectable(ctx context.Context, a *ReadRequest, res
 	expected := c.n
 	replyChan := make(chan internalState, expected)
 	for _, n := range c.nodes {
-		go callGRPCReadCorrectable(ctx, n, a, replyChan)
+		node := n // Bind node to current n as n has changed when the function is actually executed.
+		n.rpcs <- func() {
+			callGRPCReadCorrectable(ctx, node, a, replyChan)
+		}
 	}
 
 	var (

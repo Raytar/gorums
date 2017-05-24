@@ -22,6 +22,7 @@ type Node struct {
 	addr   string
 	conn   *grpc.ClientConn
 	logger *log.Logger
+	rpcs   chan func()
 
 	StorageClient StorageClient
 
@@ -60,5 +61,6 @@ func (n *Node) close() error {
 		}
 		return fmt.Errorf("%d: conn close error: %v", n.id, err)
 	}
+	close(n.rpcs)
 	return nil
 }
