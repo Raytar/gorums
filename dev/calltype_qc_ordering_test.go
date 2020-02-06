@@ -31,7 +31,7 @@ func TestQuorumCallOrdering(t *testing.T) {
 	defer closeListeners(allServers)
 	defer stopGrpcServe(allServers)
 
-	mgr, err := qc.NewManager(servers.addrs(), dialOpts, qc.WithDialTimeout(time.Second))
+	mgr, err := qc.NewManager(servers.addrs(), dialOpts, qc.WithDialTimeout(time.Second), qc.WithNodeOrdering())
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
