@@ -7,8 +7,14 @@ option go_package = "cmd/protoc-gen-gorums/dev";
 import "gorums.proto";
 import "google/protobuf/empty.proto";
 
-message Request { string Value = 1; }
-message Response { int64 Result = 1; }
+message Request { 
+  string Value = 1;
+  uint64 MsgID = 2;
+}
+message Response { 
+  int64 Result = 1;
+  uint64 MsgID = 2;
+}
 message MyResponse {
   string Value = 1;
   int64 Result = 2;
@@ -176,6 +182,9 @@ service ZorumsService {
   // type as Correctable: Response.
   rpc CorrectableEmpty2(google.protobuf.Empty) returns (Response) {
     option (gorums.correctable) = true;
+  }
+  rpc StrictOrdering(stream Request) returns (stream Response) {
+    option (gorums.qc_strict_ordering) = "MsgID";
   }
 
   // ---------------------------------------------------------------

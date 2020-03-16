@@ -32,6 +32,12 @@ func (n *Node) connectStream() (err error) {
 		return {{$errorf}}("stream creation failed: %v", err)
 	}
 	{{- end -}}
+
+	{{range orderingMethods .Methods -}}
+	{{$unexportMethod := unexport .GoName}}
+	go n.{{$unexportMethod}}SendMsgs()
+	go n.{{$unexportMethod}}RecvMsgs()
+	{{- end -}}
 	{{end}}
 	return nil
 }
@@ -41,14 +47,80 @@ var nodeCloseStream = `
 func (n *Node) closeStream() (err error) {
 	{{- range .Services -}}
 	{{- range streamMethods .Methods}}
+	{{- if .Desc.IsStreamingServer}}
+	err = n.{{unexport .GoName}}Client.CloseSend()
+	{{- else}}
 	_, err = n.{{unexport .GoName}}Client.CloseAndRecv()
+	{{- end -}}
+	{{- end -}}
+	{{range orderingMethods .Methods}}
+	close(n.{{unexport .GoName}}Send)
 	{{- end -}}
 	{{end}}
 	return err
 }
 `
 
-var node = nodeServices + nodeConnectStream + nodeCloseStream
+var nodeHandlers = `
+{{$file := .GenFile -}}
+{{$ioEOF := use "io.EOF" .GenFile -}}
+{{range .Services -}}
+{{range orderingMethods .Methods}}
+{{$unexportMethod := unexport .GoName -}}
+{{$method := .GoName -}}
+{{$out := out $file . -}}
+{{$intOut := printf "internal%s" $out -}}
+func (n *Node) {{$unexportMethod}}SendMsgs() {
+	for msg := range n.{{$unexportMethod}}Send {
+		err := n.{{$unexportMethod}}Client.SendMsg(msg)
+		if err != nil {
+			if err != {{$ioEOF}} {
+				n.setLastErr(err)
+			}
+			return
+		}
+	}
+}
+
+func (n *Node) {{$unexportMethod}}RecvMsgs() {
+	for {
+		msg := new({{$out}})
+		err := n.{{$unexportMethod}}Client.RecvMsg(msg)
+		if err != nil {
+			if err != {{$ioEOF}} {
+				n.setLastErr(err)
+			}
+			return
+		}
+		id := msg.{{msgIDField .}}
+		n.{{$unexportMethod}}Lock.RLock()
+		if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
+			c <- &{{$intOut}}{n.id, msg, nil}
+		}
+		n.{{$unexportMethod}}Lock.RUnlock()
+	}
+}
+{{- end -}}
+{{end -}}
+`
+
+var nodeData = `
+{{$file := .GenFile}}
+type nodeData struct {
+{{range .Services}}
+{{- range orderingMethods .Methods}}
+{{$unexportMethod := unexport .GoName}}
+{{$out := out $file .}}
+{{$intOut := printf "internal%s" $out}}
+	{{$unexportMethod}}Send chan *{{in $file .}}
+	{{$unexportMethod}}Recv map[uint64]chan *{{$intOut}}
+	{{$unexportMethod}}Lock *{{use "sync.RWMutex" $file}}
+{{- end -}}
+{{end}}
+}
+`
+
+var node = nodeServices + nodeConnectStream + nodeCloseStream + nodeHandlers + nodeData
 
 // streamMethods returns all methods that support client streaming.
 func streamMethods(methods []*protogen.Method) []*protogen.Method {

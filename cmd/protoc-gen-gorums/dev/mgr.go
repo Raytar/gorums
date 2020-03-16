@@ -26,6 +26,9 @@ type Manager struct {
 	closeOnce sync.Once
 	logger    *log.Logger
 	opts      managerOptions
+
+	// embed generated managerData
+	*managerData
 }
 
 // NewManager attempts to connect to the given set of node addresses and if
@@ -36,8 +39,9 @@ func NewManager(nodeAddrs []string, opts ...ManagerOption) (*Manager, error) {
 	}
 
 	m := &Manager{
-		lookup:  make(map[uint32]*Node),
-		configs: make(map[uint32]*Configuration),
+		lookup:      make(map[uint32]*Node),
+		configs:     make(map[uint32]*Configuration),
+		managerData: newManagerData(),
 	}
 
 	for _, opt := range opts {
@@ -92,9 +96,10 @@ func (m *Manager) createNode(addr string) (*Node, error) {
 	}
 
 	node := &Node{
-		id:      id,
-		addr:    tcpAddr.String(),
-		latency: -1 * time.Second,
+		id:       id,
+		addr:     tcpAddr.String(),
+		latency:  -1 * time.Second,
+		nodeData: m.createNodeData(),
 	}
 
 	return node, nil

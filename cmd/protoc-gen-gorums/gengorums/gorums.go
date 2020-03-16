@@ -54,6 +54,8 @@ func GenerateFile(gen *protogen.Plugin, file *protogen.File) *protogen.Generated
 // GenerateFileContent generates the Gorums service definitions, excluding the package statement.
 func GenerateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.GeneratedFile) {
 	data := servicesData{g, file.Services}
+	g.P(mustExecute(parseTemplate("Manager", manager), data))
+	g.P()
 	g.P(mustExecute(parseTemplate("Node", node), data))
 	g.P()
 	g.P(mustExecute(parseTemplate("QuorumSpec", qspecInterface), data))
@@ -106,7 +108,7 @@ type methodData struct {
 // the given gorums type.
 func hasGorumsType(services []*protogen.Service, gorumsType string) bool {
 	// TODO(meling) try to avoid this loop slice; reuse devTypes??
-	for _, gType := range []string{"node", "qspec", "types"} {
+	for _, gType := range []string{"node", "qspec", "types", "manager"} {
 		if gorumsType == gType {
 			return true
 		}
@@ -127,6 +129,7 @@ var gorumsTypes = map[string]*protoimpl.ExtensionInfo{
 	gorums.E_Correctable.Name[index:]:       gorums.E_Correctable,
 	gorums.E_CorrectableStream.Name[index:]: gorums.E_CorrectableStream,
 	gorums.E_Multicast.Name[index:]:         gorums.E_Multicast,
+	gorums.E_QcStrictOrdering.Name[index:]:  gorums.E_QcStrictOrdering,
 }
 
 var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
@@ -135,6 +138,7 @@ var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       correctableCall,
 	gorums.E_CorrectableStream: correctableStreamCall,
 	gorums.E_Multicast:         multicastCall,
+	gorums.E_QcStrictOrdering:  strictOrderingCall,
 }
 
 var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
@@ -143,6 +147,7 @@ var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       "correctable quorum",
 	gorums.E_CorrectableStream: "correctable stream quorum",
 	gorums.E_Multicast:         "multicast",
+	gorums.E_QcStrictOrdering:  "strict ordering quorum",
 }
 
 // gorumsCallTypes should list all available call types supported by Gorums.
@@ -153,6 +158,7 @@ var gorumsCallTypes = []*protoimpl.ExtensionInfo{
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
 	gorums.E_Multicast,
+	gorums.E_QcStrictOrdering,
 }
 
 // callTypesWithInternal should list all available call types that
@@ -163,6 +169,7 @@ var callTypesWithInternal = []*protoimpl.ExtensionInfo{
 	gorums.E_QcFuture,
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
+	gorums.E_QcStrictOrdering,
 }
 
 // callTypesWithPromiseObject lists all call types that returns
@@ -234,25 +241,31 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 			"%s.%s: cannot combine non-quorum call method with the '%s' option",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_QfWithReq.Name)
 
-	case !hasMethodOption(method, gorums.E_Multicast) && method.Desc.IsStreamingClient():
+	case !hasMethodOption(method, gorums.E_Multicast, gorums.E_QcStrictOrdering) && method.Desc.IsStreamingClient():
 		log.Fatalf(
-			"%s.%s: client-server streams is only valid with the '%s' option",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name)
+			"%s.%s: client-server streams is only valid with the '%s' or '%s' options",
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name, gorums.E_QcStrictOrdering.Name)
 
 	case hasMethodOption(method, gorums.E_Multicast) && !method.Desc.IsStreamingClient():
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for client-server streams methods",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name)
 
-	case !hasMethodOption(method, gorums.E_CorrectableStream) && method.Desc.IsStreamingServer():
+	case !hasMethodOption(method, gorums.E_CorrectableStream, gorums.E_QcStrictOrdering) && method.Desc.IsStreamingServer():
 		log.Fatalf(
-			"%s.%s: server-client streams is only valid with the '%s' option",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name)
+			"%s.%s: server-client streams is only valid with the '%s' or '%s' options",
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name, gorums.E_QcStrictOrdering.Name)
 
 	case hasMethodOption(method, gorums.E_CorrectableStream) && !method.Desc.IsStreamingServer():
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for server-client streams",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name)
+
+	case hasMethodOption(method, gorums.E_QcStrictOrdering) && (!method.Desc.IsStreamingClient() || !method.Desc.IsStreamingServer()):
+		log.Fatalf(
+			"%s.%s: '%s' option is only valid for bidirectional streams",
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_QcStrictOrdering.Name)
 	}
+
 	return firstOption
 }

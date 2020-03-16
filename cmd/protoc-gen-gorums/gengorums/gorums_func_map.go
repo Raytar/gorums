@@ -20,6 +20,7 @@ var importMap = map[string]protogen.GoImportPath{
 	"fmt":     protogen.GoImportPath("fmt"),
 	"log":     protogen.GoImportPath("log"),
 	"sync":    protogen.GoImportPath("sync"),
+	"atomic":  protogen.GoImportPath("sync/atomic"),
 	"context": protogen.GoImportPath("context"),
 	"trace":   protogen.GoImportPath("golang.org/x/net/trace"),
 	"grpc":    protogen.GoImportPath("google.golang.org/grpc"),
@@ -116,6 +117,8 @@ var funcMap = template.FuncMap{
 	"qcresult":              qcresult,
 	"contains":              strings.Contains,
 	"field":                 field,
+	"orderingMethods":       orderingMethods,
+	"msgIDField":            msgIDField,
 }
 
 type mapFunc func(*protogen.GeneratedFile, *protogen.Method, map[string]string)
@@ -224,4 +227,10 @@ func mustExecute(t *template.Template, data interface{}) string {
 		panic(err)
 	}
 	return b.String()
+}
+
+func msgIDField(method *protogen.Method) string {
+	ext := protoimpl.X.MessageOf(method.Desc.Options()).Interface()
+	idField := fmt.Sprintf("%v", proto.GetExtension(ext, gorums.E_QcStrictOrdering))
+	return idField
 }
