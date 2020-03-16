@@ -6,8 +6,14 @@ option go_package = "cmd/protoc-gen-gorums/dev";
 
 import "gorums.proto";
 
-message ReadRequest { string Value = 1; }
-message ReadResponse { int64 Result = 1; }
+message ReadRequest { 
+  string Value = 1;
+  uint64 MsgID = 2;
+}
+message ReadResponse { 
+  int64 Result = 1;
+  uint64 MsgID = 2;
+}
 message MyReadResponse {
   string Value = 1;
   int64 Result = 2;
@@ -54,5 +60,8 @@ service ReaderService {
   }
   rpc ReadCorrectableStream(ReadRequest) returns (stream ReadResponse) {
     option (gorums.correctable_stream) = true;
+  }
+  rpc ReadOrdered(stream ReadRequest) returns (stream ReadResponse) {
+    option (gorums.qc_strict_ordering) = "MsgID";
   }
 }

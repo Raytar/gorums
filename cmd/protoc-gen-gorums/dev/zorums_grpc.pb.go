@@ -35,6 +35,7 @@ type ReaderServiceClient interface {
 	ReadQuorumCallFuture(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	ReadCorrectable(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	ReadCorrectableStream(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (ReaderService_ReadCorrectableStreamClient, error)
+	ReadOrdered(ctx context.Context, opts ...grpc.CallOption) (ReaderService_ReadOrderedClient, error)
 }
 
 type readerServiceClient struct {
@@ -217,6 +218,37 @@ func (x *readerServiceReadCorrectableStreamClient) Recv() (*ReadResponse, error)
 	return m, nil
 }
 
+func (c *readerServiceClient) ReadOrdered(ctx context.Context, opts ...grpc.CallOption) (ReaderService_ReadOrderedClient, error) {
+	stream, err := c.cc.NewStream(ctx, &_ReaderService_serviceDesc.Streams[3], "/dev.ReaderService/ReadOrdered", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &readerServiceReadOrderedClient{stream}
+	return x, nil
+}
+
+type ReaderService_ReadOrderedClient interface {
+	Send(*ReadRequest) error
+	Recv() (*ReadResponse, error)
+	grpc.ClientStream
+}
+
+type readerServiceReadOrderedClient struct {
+	grpc.ClientStream
+}
+
+func (x *readerServiceReadOrderedClient) Send(m *ReadRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *readerServiceReadOrderedClient) Recv() (*ReadResponse, error) {
+	m := new(ReadResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // ReaderServiceServer is the server API for ReaderService service.
 type ReaderServiceServer interface {
 	ReadGrpc(context.Context, *ReadRequest) (*ReadResponse, error)
@@ -233,6 +265,7 @@ type ReaderServiceServer interface {
 	ReadQuorumCallFuture(context.Context, *ReadRequest) (*ReadResponse, error)
 	ReadCorrectable(context.Context, *ReadRequest) (*ReadResponse, error)
 	ReadCorrectableStream(*ReadRequest, ReaderService_ReadCorrectableStreamServer) error
+	ReadOrdered(ReaderService_ReadOrderedServer) error
 }
 
 // UnimplementedReaderServiceServer can be embedded to have forward compatible implementations.
@@ -271,6 +304,9 @@ func (*UnimplementedReaderServiceServer) ReadCorrectable(context.Context, *ReadR
 }
 func (*UnimplementedReaderServiceServer) ReadCorrectableStream(*ReadRequest, ReaderService_ReadCorrectableStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method ReadCorrectableStream not implemented")
+}
+func (*UnimplementedReaderServiceServer) ReadOrdered(ReaderService_ReadOrderedServer) error {
+	return status.Errorf(codes.Unimplemented, "method ReadOrdered not implemented")
 }
 
 func RegisterReaderServiceServer(s *grpc.Server, srv ReaderServiceServer) {
@@ -494,6 +530,32 @@ func (x *readerServiceReadCorrectableStreamServer) Send(m *ReadResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _ReaderService_ReadOrdered_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ReaderServiceServer).ReadOrdered(&readerServiceReadOrderedServer{stream})
+}
+
+type ReaderService_ReadOrderedServer interface {
+	Send(*ReadResponse) error
+	Recv() (*ReadRequest, error)
+	grpc.ServerStream
+}
+
+type readerServiceReadOrderedServer struct {
+	grpc.ServerStream
+}
+
+func (x *readerServiceReadOrderedServer) Send(m *ReadResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *readerServiceReadOrderedServer) Recv() (*ReadRequest, error) {
+	m := new(ReadRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 var _ReaderService_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "dev.ReaderService",
 	HandlerType: (*ReaderServiceServer)(nil),
@@ -546,6 +608,12 @@ var _ReaderService_serviceDesc = grpc.ServiceDesc{
 			StreamName:    "ReadCorrectableStream",
 			Handler:       _ReaderService_ReadCorrectableStream_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ReadOrdered",
+			Handler:       _ReaderService_ReadOrdered_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "zorums.proto",

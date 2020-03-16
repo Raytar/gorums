@@ -36,4 +36,8 @@ type QuorumSpec interface {
 	// ReadCorrectableStreamQF is the quorum function for the ReadCorrectableStream
 	// correctable stream quorum call method.
 	ReadCorrectableStreamQF(replies []*ReadResponse) (*ReadResponse, int, bool)
+
+	// ReadOrderedQF is the quorum function for the ReadOrdered
+	// strict ordering quorum call method.
+	ReadOrderedQF(replies []*ReadResponse) (*ReadResponse, bool)
 }

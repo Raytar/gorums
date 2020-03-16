@@ -26,6 +26,8 @@ type Node struct {
 	latency time.Duration
 	// embed generated nodeServices
 	nodeServices
+	// embed generated nodeData
+	*nodeData
 }
 
 // connect to this node to facilitate gRPC calls and optionally client streams.
