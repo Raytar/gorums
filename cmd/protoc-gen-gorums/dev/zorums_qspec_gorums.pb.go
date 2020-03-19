@@ -97,6 +97,10 @@ type QuorumSpec interface {
 	// correctable quorum call method.
 	CorrectableEmpty2QF(replies []*Response) (*Response, int, bool)
 
+	// StrictOrderingQF is the quorum function for the StrictOrdering
+	// strict ordering quorum call method.
+	StrictOrderingQF(replies []*Response) (*Response, bool)
+
 	// CorrectableStreamQF is the quorum function for the CorrectableStream
 	// correctable stream quorum call method.
 	CorrectableStreamQF(replies []*Response) (*Response, int, bool)

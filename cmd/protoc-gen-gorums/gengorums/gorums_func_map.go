@@ -27,6 +27,9 @@ var importMap = map[string]protogen.GoImportPath{
 	"codes":   protogen.GoImportPath("google.golang.org/grpc/codes"),
 	"status":  protogen.GoImportPath("google.golang.org/grpc/status"),
 	"gorums":  protogen.GoImportPath("github.com/relab/gorums"),
+	"rand":    protogen.GoImportPath("math/rand"),
+	"backoff": protogen.GoImportPath("google.golang.org/grpc/backoff"),
+	"math":    protogen.GoImportPath("math"),
 }
 
 func addImport(path, ident string, g *protogen.GeneratedFile) string {

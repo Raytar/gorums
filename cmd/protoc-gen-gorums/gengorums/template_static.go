@@ -425,6 +425,7 @@ type Node struct {
 	id      uint32
 	addr    string
 	conn    *grpc.ClientConn
+	cancel  func()
 	mu      sync.Mutex
 	lastErr error
 	latency time.Duration
@@ -443,7 +444,9 @@ func (n *Node) connect(opts managerOptions) error {
 	if err != nil {
 		return fmt.Errorf("dialing node failed: %w", err)
 	}
-	return n.connectStream() // call generated method
+	// a context for all of the streams
+	ctx, n.cancel = context.WithCancel(context.Background())
+	return n.connectStream(ctx) // call generated method
 }
 
 // close this node for further calls and optionally stream.
@@ -451,7 +454,9 @@ func (n *Node) close() error {
 	if err := n.conn.Close(); err != nil {
 		return fmt.Errorf("%d: conn close error: %w", n.id, err)
 	}
-	return n.closeStream() // call generated method
+	err := n.closeStream() // call generated method
+	n.cancel()
+	return err
 }
 
 // ID returns the ID of n.

@@ -83,6 +83,7 @@ type ZorumsServiceClient interface {
 	// CorrectableEmpty2 for testing imported message type; with same return
 	// type as Correctable: Response.
 	CorrectableEmpty2(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*Response, error)
+	StrictOrdering(ctx context.Context, opts ...grpc.CallOption) (ZorumsService_StrictOrderingClient, error)
 	// CorrectableStream plain.
 	CorrectableStream(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamClient, error)
 	// CorrectablePerNodeArg with per_node_arg option.
@@ -485,8 +486,39 @@ func (c *zorumsServiceClient) CorrectableEmpty2(ctx context.Context, in *empty.E
 	return out, nil
 }
 
+func (c *zorumsServiceClient) StrictOrdering(ctx context.Context, opts ...grpc.CallOption) (ZorumsService_StrictOrderingClient, error) {
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[5], "/dev.ZorumsService/StrictOrdering", opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &zorumsServiceStrictOrderingClient{stream}
+	return x, nil
+}
+
+type ZorumsService_StrictOrderingClient interface {
+	Send(*Request) error
+	Recv() (*Response, error)
+	grpc.ClientStream
+}
+
+type zorumsServiceStrictOrderingClient struct {
+	grpc.ClientStream
+}
+
+func (x *zorumsServiceStrictOrderingClient) Send(m *Request) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *zorumsServiceStrictOrderingClient) Recv() (*Response, error) {
+	m := new(Response)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func (c *zorumsServiceClient) CorrectableStream(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[5], "/dev.ZorumsService/CorrectableStream", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[6], "/dev.ZorumsService/CorrectableStream", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +550,7 @@ func (x *zorumsServiceCorrectableStreamClient) Recv() (*Response, error) {
 }
 
 func (c *zorumsServiceClient) CorrectableStreamPerNodeArg(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamPerNodeArgClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[6], "/dev.ZorumsService/CorrectableStreamPerNodeArg", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[7], "/dev.ZorumsService/CorrectableStreamPerNodeArg", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +582,7 @@ func (x *zorumsServiceCorrectableStreamPerNodeArgClient) Recv() (*Response, erro
 }
 
 func (c *zorumsServiceClient) CorrectableStreamQFWithRequestArg(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamQFWithRequestArgClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[7], "/dev.ZorumsService/CorrectableStreamQFWithRequestArg", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[8], "/dev.ZorumsService/CorrectableStreamQFWithRequestArg", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -582,7 +614,7 @@ func (x *zorumsServiceCorrectableStreamQFWithRequestArgClient) Recv() (*Response
 }
 
 func (c *zorumsServiceClient) CorrectableStreamCustomReturnType(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamCustomReturnTypeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[8], "/dev.ZorumsService/CorrectableStreamCustomReturnType", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[9], "/dev.ZorumsService/CorrectableStreamCustomReturnType", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +646,7 @@ func (x *zorumsServiceCorrectableStreamCustomReturnTypeClient) Recv() (*Response
 }
 
 func (c *zorumsServiceClient) CorrectableStreamCombo(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamComboClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[9], "/dev.ZorumsService/CorrectableStreamCombo", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[10], "/dev.ZorumsService/CorrectableStreamCombo", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -646,7 +678,7 @@ func (x *zorumsServiceCorrectableStreamComboClient) Recv() (*Response, error) {
 }
 
 func (c *zorumsServiceClient) CorrectableStreamEmpty(ctx context.Context, in *Request, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamEmptyClient, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[10], "/dev.ZorumsService/CorrectableStreamEmpty", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[11], "/dev.ZorumsService/CorrectableStreamEmpty", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +710,7 @@ func (x *zorumsServiceCorrectableStreamEmptyClient) Recv() (*empty.Empty, error)
 }
 
 func (c *zorumsServiceClient) CorrectableStreamEmpty2(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (ZorumsService_CorrectableStreamEmpty2Client, error) {
-	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[11], "/dev.ZorumsService/CorrectableStreamEmpty2", opts...)
+	stream, err := c.cc.NewStream(ctx, &_ZorumsService_serviceDesc.Streams[12], "/dev.ZorumsService/CorrectableStreamEmpty2", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -772,6 +804,7 @@ type ZorumsServiceServer interface {
 	// CorrectableEmpty2 for testing imported message type; with same return
 	// type as Correctable: Response.
 	CorrectableEmpty2(context.Context, *empty.Empty) (*Response, error)
+	StrictOrdering(ZorumsService_StrictOrderingServer) error
 	// CorrectableStream plain.
 	CorrectableStream(*Request, ZorumsService_CorrectableStreamServer) error
 	// CorrectablePerNodeArg with per_node_arg option.
@@ -876,6 +909,9 @@ func (*UnimplementedZorumsServiceServer) CorrectableEmpty(context.Context, *Requ
 }
 func (*UnimplementedZorumsServiceServer) CorrectableEmpty2(context.Context, *empty.Empty) (*Response, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CorrectableEmpty2 not implemented")
+}
+func (*UnimplementedZorumsServiceServer) StrictOrdering(ZorumsService_StrictOrderingServer) error {
+	return status.Errorf(codes.Unimplemented, "method StrictOrdering not implemented")
 }
 func (*UnimplementedZorumsServiceServer) CorrectableStream(*Request, ZorumsService_CorrectableStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method CorrectableStream not implemented")
@@ -1447,6 +1483,32 @@ func _ZorumsService_CorrectableEmpty2_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZorumsService_StrictOrdering_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ZorumsServiceServer).StrictOrdering(&zorumsServiceStrictOrderingServer{stream})
+}
+
+type ZorumsService_StrictOrderingServer interface {
+	Send(*Response) error
+	Recv() (*Request, error)
+	grpc.ServerStream
+}
+
+type zorumsServiceStrictOrderingServer struct {
+	grpc.ServerStream
+}
+
+func (x *zorumsServiceStrictOrderingServer) Send(m *Response) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *zorumsServiceStrictOrderingServer) Recv() (*Request, error) {
+	m := new(Request)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 func _ZorumsService_CorrectableStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(Request)
 	if err := stream.RecvMsg(m); err != nil {
@@ -1715,6 +1777,12 @@ var _ZorumsService_serviceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Multicast4",
 			Handler:       _ZorumsService_Multicast4_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "StrictOrdering",
+			Handler:       _ZorumsService_StrictOrdering_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 		{

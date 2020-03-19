@@ -10,12 +10,12 @@ import (
 	time "time"
 )
 
-// ReadOrdered is a quorum call invoked on all nodes in configuration c,
+// StrictOrdering is a quorum call invoked on all nodes in configuration c,
 // with the same argument in, and returns a combined result.
-func (c *Configuration) ReadOrdered(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (resp *ReadResponse, err error) {
+func (c *Configuration) StrictOrdering(ctx context.Context, in *Request, opts ...grpc.CallOption) (resp *Response, err error) {
 	var ti traceInfo
 	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "ReadOrdered")
+		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "StrictOrdering")
 		defer ti.Finish()
 
 		ti.firstLine.cid = c.id
@@ -34,30 +34,30 @@ func (c *Configuration) ReadOrdered(ctx context.Context, in *ReadRequest, opts .
 	}
 
 	// get the ID which will be used to return the correct responses for a request
-	msgID := atomic.AddUint64(&c.mgr.readOrderedID, 1)
+	msgID := atomic.AddUint64(&c.mgr.strictOrderingID, 1)
 	in.MsgID = msgID
 
 	// set up a channel to collect replies
-	replies := make(chan *internalReadResponse, c.n)
-	c.mgr.readOrderedLock.Lock()
-	c.mgr.readOrderedRecv[msgID] = replies
-	c.mgr.readOrderedLock.Unlock()
+	replies := make(chan *internalResponse, c.n)
+	c.mgr.strictOrderingLock.Lock()
+	c.mgr.strictOrderingRecv[msgID] = replies
+	c.mgr.strictOrderingLock.Unlock()
 
 	defer func() {
 		// remove the replies channel when we are done
-		c.mgr.readOrderedLock.Lock()
-		delete(c.mgr.readOrderedRecv, msgID)
-		c.mgr.readOrderedLock.Unlock()
+		c.mgr.strictOrderingLock.Lock()
+		delete(c.mgr.strictOrderingRecv, msgID)
+		c.mgr.strictOrderingLock.Unlock()
 	}()
 
 	// push the message to the nodes
 	expected := c.n
 	for _, n := range c.nodes {
-		n.readOrderedSend <- in
+		n.strictOrderingSend <- in
 	}
 
 	var (
-		replyValues = make([]*ReadResponse, 0, expected)
+		replyValues = make([]*Response, 0, expected)
 		errs        []GRPCError
 		quorum      bool
 	)
@@ -77,7 +77,7 @@ func (c *Configuration) ReadOrdered(ctx context.Context, in *ReadRequest, opts .
 			}
 
 			replyValues = append(replyValues, r.reply)
-			if resp, quorum = c.qspec.ReadOrderedQF(replyValues); quorum {
+			if resp, quorum = c.qspec.StrictOrderingQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
@@ -90,11 +90,11 @@ func (c *Configuration) ReadOrdered(ctx context.Context, in *ReadRequest, opts .
 	}
 }
 
-// ReadOrderedServerLoop is a helper function that will receive messages on srv,
+// StrictOrderingServerLoop is a helper function that will receive messages on srv,
 // generate a response message using getResponse, and send the response back on
 // srv. The function returns when the stream ends, and returns the error that
 // caused it to end.
-func ReadOrderedServerLoop(srv ReaderService_ReadOrderedServer, getResponse func(*ReadRequest) *ReadResponse) error {
+func StrictOrderingServerLoop(srv ZorumsService_StrictOrderingServer, getResponse func(*Request) *Response) error {
 	ctx := srv.Context()
 	for {
 		select {

@@ -7,21 +7,21 @@ import (
 )
 
 type managerData struct {
-	readOrderedID   uint64
-	readOrderedRecv map[uint64]chan *internalReadResponse
-	readOrderedLock sync.RWMutex
+	strictOrderingID   uint64
+	strictOrderingRecv map[uint64]chan *internalResponse
+	strictOrderingLock sync.RWMutex
 }
 
 func newManagerData() *managerData {
 	return &managerData{
-		readOrderedRecv: make(map[uint64]chan *internalReadResponse),
+		strictOrderingRecv: make(map[uint64]chan *internalResponse),
 	}
 }
 
 func (m *managerData) createNodeData() *nodeData {
 	return &nodeData{
-		readOrderedSend: make(chan *ReadRequest, 1),
-		readOrderedRecv: m.readOrderedRecv,
-		readOrderedLock: &m.readOrderedLock,
+		strictOrderingSend: make(chan *Request, 1),
+		strictOrderingRecv: m.strictOrderingRecv,
+		strictOrderingLock: &m.strictOrderingLock,
 	}
 }

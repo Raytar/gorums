@@ -5,6 +5,14 @@ package dev
 import (
 	context "context"
 	fmt "fmt"
+	backoff "google.golang.org/grpc/backoff"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
+	math "math"
+	rand "math/rand"
+	sync "sync"
+	atomic "sync/atomic"
+	time "time"
 )
 
 type nodeServices struct {
@@ -14,30 +22,37 @@ type nodeServices struct {
 	multicast2Client          ZorumsService_Multicast2Client
 	multicast3Client          ZorumsService_Multicast3Client
 	multicast4Client          ZorumsService_Multicast4Client
+	strictOrderingClient      ZorumsService_StrictOrderingClient
 }
 
-func (n *Node) connectStream() (err error) {
+func (n *Node) connectStream(ctx context.Context) (err error) {
 	n.ZorumsServiceClient = NewZorumsServiceClient(n.conn)
-	n.multicastClient, err = n.ZorumsServiceClient.Multicast(context.Background())
+	n.multicastClient, err = n.ZorumsServiceClient.Multicast(ctx)
 	if err != nil {
 		return fmt.Errorf("stream creation failed: %v", err)
 	}
-	n.multicastPerNodeArgClient, err = n.ZorumsServiceClient.MulticastPerNodeArg(context.Background())
+	n.multicastPerNodeArgClient, err = n.ZorumsServiceClient.MulticastPerNodeArg(ctx)
 	if err != nil {
 		return fmt.Errorf("stream creation failed: %v", err)
 	}
-	n.multicast2Client, err = n.ZorumsServiceClient.Multicast2(context.Background())
+	n.multicast2Client, err = n.ZorumsServiceClient.Multicast2(ctx)
 	if err != nil {
 		return fmt.Errorf("stream creation failed: %v", err)
 	}
-	n.multicast3Client, err = n.ZorumsServiceClient.Multicast3(context.Background())
+	n.multicast3Client, err = n.ZorumsServiceClient.Multicast3(ctx)
 	if err != nil {
 		return fmt.Errorf("stream creation failed: %v", err)
 	}
-	n.multicast4Client, err = n.ZorumsServiceClient.Multicast4(context.Background())
+	n.multicast4Client, err = n.ZorumsServiceClient.Multicast4(ctx)
 	if err != nil {
 		return fmt.Errorf("stream creation failed: %v", err)
 	}
+	n.strictOrderingClient, err = n.ZorumsServiceClient.StrictOrdering(ctx)
+	if err != nil {
+		return fmt.Errorf("stream creation failed: %v", err)
+	}
+	go n.strictOrderingSendMsgs()
+	go n.strictOrderingRecvMsgs(ctx)
 	return nil
 }
 
@@ -47,5 +62,91 @@ func (n *Node) closeStream() (err error) {
 	_, err = n.multicast2Client.CloseAndRecv()
 	_, err = n.multicast3Client.CloseAndRecv()
 	_, err = n.multicast4Client.CloseAndRecv()
+	err = n.strictOrderingClient.CloseSend()
+	close(n.strictOrderingSend)
 	return err
+}
+
+func (n *Node) strictOrderingSendMsgs() {
+	for msg := range n.strictOrderingSend {
+		if broken := atomic.LoadUint32(&n.strictOrderingLinkBroken); broken == 1 {
+			id := msg.MsgID
+			err := status.Errorf(codes.Unavailable, "stream is down")
+			n.strictOrderingLock.RLock()
+			if c, ok := n.strictOrderingRecv[id]; ok {
+				c <- &internalResponse{n.id, nil, err}
+			}
+			n.strictOrderingLock.RUnlock()
+		}
+		err := n.strictOrderingClient.SendMsg(msg)
+		if err != nil {
+			atomic.StoreUint32(&n.strictOrderingLinkBroken, 1)
+			// return the error
+			id := msg.MsgID
+			n.strictOrderingLock.RLock()
+			if c, ok := n.strictOrderingRecv[id]; ok {
+				c <- &internalResponse{n.id, nil, err}
+			}
+			n.strictOrderingLock.RUnlock()
+		}
+	}
+}
+
+func (n *Node) strictOrderingRecvMsgs(ctx context.Context) {
+	for {
+		msg := new(Response)
+		err := n.strictOrderingClient.RecvMsg(msg)
+		if err != nil {
+			atomic.StoreUint32(&n.strictOrderingLinkBroken, 1)
+			n.setLastErr(err)
+			// reconnect
+			n.strictOrderingReconnect(ctx)
+		}
+		id := msg.MsgID
+		n.strictOrderingLock.RLock()
+		if c, ok := n.strictOrderingRecv[id]; ok {
+			c <- &internalResponse{n.id, msg, nil}
+		}
+		n.strictOrderingLock.RUnlock()
+		select {
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (n *Node) strictOrderingReconnect(ctx context.Context) {
+	// attempt to reconnect with exponential backoff
+	// TODO: Allow using a custom config
+	bc := backoff.DefaultConfig
+	retries := 0.0
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for {
+		var err error
+		n.strictOrderingClient, err = n.ZorumsServiceClient.StrictOrdering(ctx)
+		if err == nil {
+			atomic.StoreUint32(&n.strictOrderingLinkBroken, 0)
+			return
+		}
+		delay := float64(bc.BaseDelay)
+		max := float64(bc.MaxDelay)
+		if retries > 0 {
+			delay = math.Pow(delay, retries)
+			delay = math.Min(delay, max)
+		}
+		delay *= 1 + bc.Jitter*(r.Float64()*2-1)
+		time.Sleep(time.Duration(delay))
+		retries++
+		select {
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+type nodeData struct {
+	strictOrderingSend       chan *Request
+	strictOrderingRecv       map[uint64]chan *internalResponse
+	strictOrderingLock       *sync.RWMutex
+	strictOrderingLinkBroken uint32
 }
