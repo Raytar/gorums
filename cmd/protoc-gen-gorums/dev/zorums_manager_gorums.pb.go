@@ -20,8 +20,8 @@ func newManagerData() *managerData {
 
 func (m *managerData) createNodeData() *nodeData {
 	return &nodeData{
-		strictOrderingSend: make(chan *Request, 1),
-		strictOrderingRecv: m.strictOrderingRecv,
-		strictOrderingLock: &m.strictOrderingLock,
+		strictOrderingSend:    make(chan *Request, 1),
+		strictOrderingRecv:    m.strictOrderingRecv,
+		strictOrderingMapLock: &m.strictOrderingLock,
 	}
 }

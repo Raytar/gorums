@@ -11,7 +11,6 @@ import (
 	math "math"
 	rand "math/rand"
 	sync "sync"
-	atomic "sync/atomic"
 	time "time"
 )
 
@@ -69,48 +68,58 @@ func (n *Node) closeStream() (err error) {
 
 func (n *Node) strictOrderingSendMsgs() {
 	for msg := range n.strictOrderingSend {
-		if broken := atomic.LoadUint32(&n.strictOrderingLinkBroken); broken == 1 {
+		if n.strictOrderingLinkBroken {
 			id := msg.MsgID
 			err := status.Errorf(codes.Unavailable, "stream is down")
-			n.strictOrderingLock.RLock()
+			n.strictOrderingMapLock.RLock()
 			if c, ok := n.strictOrderingRecv[id]; ok {
 				c <- &internalResponse{n.id, nil, err}
 			}
-			n.strictOrderingLock.RUnlock()
+			n.strictOrderingMapLock.RUnlock()
 		}
+		n.strictOrderingStreamLock.RLock()
+
 		err := n.strictOrderingClient.SendMsg(msg)
-		if err != nil {
-			atomic.StoreUint32(&n.strictOrderingLinkBroken, 1)
-			// return the error
-			id := msg.MsgID
-			n.strictOrderingLock.RLock()
-			if c, ok := n.strictOrderingRecv[id]; ok {
-				c <- &internalResponse{n.id, nil, err}
-			}
-			n.strictOrderingLock.RUnlock()
+		if err == nil {
+			n.strictOrderingStreamLock.RUnlock()
+			continue
 		}
+		n.strictOrderingLinkBroken = true
+		n.strictOrderingStreamLock.RUnlock()
+		// return the error
+		id := msg.MsgID
+		n.strictOrderingMapLock.RLock()
+		if c, ok := n.strictOrderingRecv[id]; ok {
+			c <- &internalResponse{n.id, nil, err}
+		}
+		n.strictOrderingMapLock.RUnlock()
 	}
 }
 
 func (n *Node) strictOrderingRecvMsgs(ctx context.Context) {
 	for {
 		msg := new(Response)
+		n.strictOrderingStreamLock.RLock()
 		err := n.strictOrderingClient.RecvMsg(msg)
 		if err != nil {
-			atomic.StoreUint32(&n.strictOrderingLinkBroken, 1)
+			n.strictOrderingLinkBroken = true
+			n.strictOrderingStreamLock.RUnlock()
 			n.setLastErr(err)
 			// reconnect
 			n.strictOrderingReconnect(ctx)
+		} else {
+			n.strictOrderingStreamLock.RUnlock()
+			id := msg.MsgID
+			n.strictOrderingMapLock.RLock()
+			if c, ok := n.strictOrderingRecv[id]; ok {
+				c <- &internalResponse{n.id, msg, nil}
+			}
+			n.strictOrderingMapLock.RUnlock()
 		}
-		id := msg.MsgID
-		n.strictOrderingLock.RLock()
-		if c, ok := n.strictOrderingRecv[id]; ok {
-			c <- &internalResponse{n.id, msg, nil}
-		}
-		n.strictOrderingLock.RUnlock()
 		select {
 		case <-ctx.Done():
 			return
+		default:
 		}
 	}
 }
@@ -125,7 +134,7 @@ func (n *Node) strictOrderingReconnect(ctx context.Context) {
 		var err error
 		n.strictOrderingClient, err = n.ZorumsServiceClient.StrictOrdering(ctx)
 		if err == nil {
-			atomic.StoreUint32(&n.strictOrderingLinkBroken, 0)
+			n.strictOrderingLinkBroken = false
 			return
 		}
 		delay := float64(bc.BaseDelay)
@@ -140,6 +149,7 @@ func (n *Node) strictOrderingReconnect(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		default:
 		}
 	}
 }
@@ -147,6 +157,7 @@ func (n *Node) strictOrderingReconnect(ctx context.Context) {
 type nodeData struct {
 	strictOrderingSend       chan *Request
 	strictOrderingRecv       map[uint64]chan *internalResponse
-	strictOrderingLock       *sync.RWMutex
-	strictOrderingLinkBroken uint32
+	strictOrderingMapLock    *sync.RWMutex
+	strictOrderingStreamLock sync.RWMutex
+	strictOrderingLinkBroken bool
 }

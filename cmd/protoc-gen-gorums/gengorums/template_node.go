@@ -64,8 +64,6 @@ func (n *Node) closeStream() (err error) {
 
 var nodeHandlers = `
 {{$file := .GenFile -}}
-{{$atomicLoad := use "atomic.LoadUint32" $file}}
-{{$atomicStore := use "atomic.StoreUint32" $file}}
 {{range .Services -}}
 {{$serviceName := .GoName}}
 {{range orderingMethods .Methods}}
@@ -75,48 +73,58 @@ var nodeHandlers = `
 {{$intOut := printf "internal%s" $out -}}
 func (n *Node) {{$unexportMethod}}SendMsgs() {
 	for msg := range n.{{$unexportMethod}}Send {
-		if broken := {{$atomicLoad}}(&n.{{$unexportMethod}}LinkBroken); broken == 1 {
+		if n.{{$unexportMethod}}LinkBroken {
 			id := msg.{{msgIDField .}}
 			err := {{use "status.Errorf" $file}}({{use "codes.Unavailable" $file}}, "stream is down")
-			n.{{$unexportMethod}}Lock.RLock()
+			n.{{$unexportMethod}}MapLock.RLock()
 			if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
 				c <- &{{$intOut}}{n.id, nil, err}
 			}
-			n.{{$unexportMethod}}Lock.RUnlock()
+			n.{{$unexportMethod}}MapLock.RUnlock()
 		}
+		n.{{$unexportMethod}}StreamLock.RLock()
+		 
 		err := n.{{$unexportMethod}}Client.SendMsg(msg)
-		if err != nil {
-			{{$atomicStore}}(&n.{{$unexportMethod}}LinkBroken, 1)
-			// return the error
-			id := msg.{{msgIDField .}}
-			n.{{$unexportMethod}}Lock.RLock()
-			if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
-				c <- &{{$intOut}}{n.id, nil, err}
-			}
-			n.{{$unexportMethod}}Lock.RUnlock()
+		if err == nil {
+			n.{{$unexportMethod}}StreamLock.RUnlock()
+			continue
 		}
+		n.{{$unexportMethod}}LinkBroken = true
+		n.{{$unexportMethod}}StreamLock.RUnlock()
+		// return the error
+		id := msg.{{msgIDField .}}
+		n.{{$unexportMethod}}MapLock.RLock()
+		if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
+			c <- &{{$intOut}}{n.id, nil, err}
+		}
+		n.{{$unexportMethod}}MapLock.RUnlock()
 	}
 }
 
 func (n *Node) {{$unexportMethod}}RecvMsgs(ctx {{$context}}) {
 	for {
 		msg := new({{$out}})
+		n.{{$unexportMethod}}StreamLock.RLock()
 		err := n.{{$unexportMethod}}Client.RecvMsg(msg)
 		if err != nil {
-			{{$atomicStore}}(&n.{{$unexportMethod}}LinkBroken, 1)
+			n.{{$unexportMethod}}LinkBroken = true
+			n.{{$unexportMethod}}StreamLock.RUnlock()
 			n.setLastErr(err)
 			// reconnect
 			n.{{$unexportMethod}}Reconnect(ctx)
+		} else {
+			n.{{$unexportMethod}}StreamLock.RUnlock()
+			id := msg.{{msgIDField .}}
+			n.{{$unexportMethod}}MapLock.RLock()
+			if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
+				c <- &{{$intOut}}{n.id, msg, nil}
+			}
+			n.{{$unexportMethod}}MapLock.RUnlock()
 		}
-		id := msg.{{msgIDField .}}
-		n.{{$unexportMethod}}Lock.RLock()
-		if c, ok := n.{{$unexportMethod}}Recv[id]; ok {
-			c <- &{{$intOut}}{n.id, msg, nil}
-		}
-		n.{{$unexportMethod}}Lock.RUnlock()
 		select {
 		case <-ctx.Done():
 			return
+		default:
 		}
 	}
 }
@@ -131,7 +139,7 @@ func (n *Node) {{$unexportMethod}}Reconnect(ctx {{$context}}) {
 		var err error
 		n.{{$unexportMethod}}Client, err = n.{{$serviceName}}Client.{{.GoName}}(ctx)
 		if err == nil {
-			{{$atomicStore}}(&n.{{$unexportMethod}}LinkBroken, 0)
+			n.{{$unexportMethod}}LinkBroken = false
 			return
 		}
 		delay := float64(bc.BaseDelay)
@@ -146,6 +154,7 @@ func (n *Node) {{$unexportMethod}}Reconnect(ctx {{$context}}) {
 		select {
 		case <-ctx.Done():
 			return
+		default:
 		}
 	}
 }
@@ -164,8 +173,9 @@ type nodeData struct {
 {{$intOut := printf "internal%s" $out}}
 	{{$unexportMethod}}Send chan *{{in $file .}}
 	{{$unexportMethod}}Recv map[uint64]chan *{{$intOut}}
-	{{$unexportMethod}}Lock *{{$mutex}}
-	{{$unexportMethod}}LinkBroken uint32
+	{{$unexportMethod}}MapLock *{{$mutex}}
+	{{$unexportMethod}}StreamLock {{$mutex}}
+	{{$unexportMethod}}LinkBroken bool
 {{- end -}}
 {{end}}
 }

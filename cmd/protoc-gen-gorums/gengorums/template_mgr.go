@@ -45,8 +45,8 @@ func (m *managerData) createNodeData() *nodeData {
 {{$unexportMethod := unexport .GoName -}}
 		{{$unexportMethod}}Send: make(chan *{{in $file .}}, 1),
 		{{$unexportMethod}}Recv: m.{{$unexportMethod}}Recv,
-		{{$unexportMethod}}Lock: &m.{{$unexportMethod}}Lock,
-{{- end -}}
+		{{$unexportMethod}}MapLock: &m.{{$unexportMethod}}Lock,
+{{end -}}
 {{end}}
 	}
 }
