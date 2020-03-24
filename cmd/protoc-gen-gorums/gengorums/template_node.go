@@ -48,9 +48,7 @@ var nodeCloseStream = `
 func (n *Node) closeStream() (err error) {
 	{{- range .Services -}}
 	{{- range streamMethods .Methods}}
-	{{- if .Desc.IsStreamingServer}}
-	err = n.{{unexport .GoName}}Client.CloseSend()
-	{{- else}}
+	{{- if not .Desc.IsStreamingServer}}
 	_, err = n.{{unexport .GoName}}Client.CloseAndRecv()
 	{{- end -}}
 	{{- end -}}

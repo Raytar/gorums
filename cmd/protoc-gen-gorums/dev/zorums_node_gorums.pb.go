@@ -61,7 +61,6 @@ func (n *Node) closeStream() (err error) {
 	_, err = n.multicast2Client.CloseAndRecv()
 	_, err = n.multicast3Client.CloseAndRecv()
 	_, err = n.multicast4Client.CloseAndRecv()
-	err = n.strictOrderingClient.CloseSend()
 	close(n.strictOrderingSend)
 	return err
 }
