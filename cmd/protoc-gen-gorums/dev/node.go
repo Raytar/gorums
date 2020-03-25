@@ -25,6 +25,9 @@ type Node struct {
 	mu      sync.Mutex
 	lastErr error
 	latency time.Duration
+
+	strictOrdering *strictOrderingStream
+
 	// embed generated nodeServices
 	nodeServices
 	// embed generated nodeData
@@ -42,6 +45,13 @@ func (n *Node) connect(opts managerOptions) error {
 	}
 	// a context for all of the streams
 	ctx, n.cancel = context.WithCancel(context.Background())
+	// only start strictOrdering RPCs when needed
+	if numStrictOrderingRPCs > 0 {
+		err = n.strictOrdering.connect(ctx, n.conn)
+		if err != nil {
+			return fmt.Errorf("starting stream failed: %w", err)
+		}
+	}
 	return n.connectStream(ctx) // call generated method
 }
 

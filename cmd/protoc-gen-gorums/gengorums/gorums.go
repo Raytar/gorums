@@ -129,7 +129,7 @@ var gorumsTypes = map[string]*protoimpl.ExtensionInfo{
 	gorums.E_Correctable.Name[index:]:       gorums.E_Correctable,
 	gorums.E_CorrectableStream.Name[index:]: gorums.E_CorrectableStream,
 	gorums.E_Multicast.Name[index:]:         gorums.E_Multicast,
-	gorums.E_QcStrictOrdering.Name[index:]:  gorums.E_QcStrictOrdering,
+	gorums.E_StrictOrdering.Name[index:]:    gorums.E_StrictOrdering,
 }
 
 var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
@@ -138,7 +138,7 @@ var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       correctableCall,
 	gorums.E_CorrectableStream: correctableStreamCall,
 	gorums.E_Multicast:         multicastCall,
-	gorums.E_QcStrictOrdering:  strictOrderingCall,
+	gorums.E_StrictOrdering:    strictOrderingQuorum,
 }
 
 var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
@@ -147,7 +147,7 @@ var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       "correctable quorum",
 	gorums.E_CorrectableStream: "correctable stream quorum",
 	gorums.E_Multicast:         "multicast",
-	gorums.E_QcStrictOrdering:  "strict ordering quorum",
+	gorums.E_StrictOrdering:    "strict ordering quorum",
 }
 
 // gorumsCallTypes should list all available call types supported by Gorums.
@@ -158,7 +158,7 @@ var gorumsCallTypes = []*protoimpl.ExtensionInfo{
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
 	gorums.E_Multicast,
-	gorums.E_QcStrictOrdering,
+	gorums.E_StrictOrdering,
 }
 
 // callTypesWithInternal should list all available call types that
@@ -169,7 +169,7 @@ var callTypesWithInternal = []*protoimpl.ExtensionInfo{
 	gorums.E_QcFuture,
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
-	gorums.E_QcStrictOrdering,
+	gorums.E_StrictOrdering,
 }
 
 // callTypesWithPromiseObject lists all call types that returns
@@ -241,30 +241,30 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 			"%s.%s: cannot combine non-quorum call method with the '%s' option",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_QfWithReq.Name)
 
-	case !hasMethodOption(method, gorums.E_Multicast, gorums.E_QcStrictOrdering) && method.Desc.IsStreamingClient():
+	case !hasMethodOption(method, gorums.E_Multicast, gorums.E_StrictOrdering) && method.Desc.IsStreamingClient():
 		log.Fatalf(
 			"%s.%s: client-server streams is only valid with the '%s' or '%s' options",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name, gorums.E_QcStrictOrdering.Name)
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name, gorums.E_StrictOrdering.Name)
 
 	case hasMethodOption(method, gorums.E_Multicast) && !method.Desc.IsStreamingClient():
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for client-server streams methods",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name)
 
-	case !hasMethodOption(method, gorums.E_CorrectableStream, gorums.E_QcStrictOrdering) && method.Desc.IsStreamingServer():
+	case !hasMethodOption(method, gorums.E_CorrectableStream, gorums.E_StrictOrdering) && method.Desc.IsStreamingServer():
 		log.Fatalf(
 			"%s.%s: server-client streams is only valid with the '%s' or '%s' options",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name, gorums.E_QcStrictOrdering.Name)
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name, gorums.E_StrictOrdering.Name)
 
 	case hasMethodOption(method, gorums.E_CorrectableStream) && !method.Desc.IsStreamingServer():
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for server-client streams",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name)
 
-	case hasMethodOption(method, gorums.E_QcStrictOrdering) && (!method.Desc.IsStreamingClient() || !method.Desc.IsStreamingServer()):
+	case hasMethodOption(method, gorums.E_StrictOrdering) && (!method.Desc.IsStreamingClient() || !method.Desc.IsStreamingServer()):
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for bidirectional streams",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_QcStrictOrdering.Name)
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_StrictOrdering.Name)
 	}
 
 	return firstOption

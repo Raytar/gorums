@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/net/trace"
+	"google.golang.org/grpc"
 )
 
 // Manager manages a pool of node configurations on which quorum remote
@@ -27,8 +28,7 @@ type Manager struct {
 	logger    *log.Logger
 	opts      managerOptions
 
-	// embed generated managerData
-	*managerData
+	*strictOrderingManager
 }
 
 // NewManager attempts to connect to the given set of node addresses and if
@@ -39,13 +39,30 @@ func NewManager(nodeAddrs []string, opts ...ManagerOption) (*Manager, error) {
 	}
 
 	m := &Manager{
-		lookup:      make(map[uint32]*Node),
-		configs:     make(map[uint32]*Configuration),
-		managerData: newManagerData(),
+		lookup:                make(map[uint32]*Node),
+		configs:               make(map[uint32]*Configuration),
+		strictOrderingManager: newStrictOrderingManager(),
 	}
 
 	for _, opt := range opts {
 		opt(&m.opts)
+	}
+
+	if m.opts.backoff != nil {
+		m.opts.grpcDialOpts = append(m.opts.grpcDialOpts, grpc.WithConnectParams(
+			grpc.ConnectParams{Backoff: *m.opts.backoff},
+		))
+	}
+
+	if numStrictOrderingRPCs > 0 && m.opts.listenAddr != "" {
+		lis, err := net.Listen("tcp", m.opts.listenAddr)
+		if err != nil {
+			return nil, ManagerCreationError(
+				fmt.Errorf("Failed to listen for strict ordering requests: %w", err),
+			)
+		}
+
+		m.serve(lis)
 	}
 
 	for _, naddr := range nodeAddrs {
@@ -96,11 +113,11 @@ func (m *Manager) createNode(addr string) (*Node, error) {
 	}
 
 	node := &Node{
-		id:       id,
-		addr:     tcpAddr.String(),
-		latency:  -1 * time.Second,
-		nodeData: m.createNodeData(),
+		id:      id,
+		addr:    tcpAddr.String(),
+		latency: -1 * time.Second,
 	}
+	node.strictOrdering = m.createStream(node, m.opts.backoff)
 
 	return node, nil
 }
@@ -145,6 +162,9 @@ func (m *Manager) Close() {
 			m.eventLog.Printf("closing")
 		}
 		m.closeNodeConns()
+		if numStrictOrderingRPCs > 0 && m.opts.listenAddr != "" {
+			m.stop()
+		}
 	})
 }
 

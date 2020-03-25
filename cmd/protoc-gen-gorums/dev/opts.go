@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	backoff "google.golang.org/grpc/backoff"
 )
 
 type managerOptions struct {
@@ -13,6 +14,8 @@ type managerOptions struct {
 	logger          *log.Logger
 	noConnect       bool
 	trace           bool
+	listenAddr      string
+	backoff         *backoff.Config
 }
 
 // ManagerOption provides a way to set different options on a new Manager.
@@ -56,5 +59,20 @@ func WithNoConnect() ManagerOption {
 func WithTracing() ManagerOption {
 	return func(o *managerOptions) {
 		o.trace = true
+	}
+}
+
+// WithListen sets the address which the manager will listen for strict ordering
+// requests on. If strict ordering is not used, then this option will have no effect.
+func WithListen(addr string) ManagerOption {
+	return func(o *managerOptions) {
+		o.listenAddr = addr
+	}
+}
+
+// WithBackoff allows for changing the backoff delays used by Gorums.
+func WithBackoff(backoff *backoff.Config) ManagerOption {
+	return func(o *managerOptions) {
+		o.backoff = backoff
 	}
 }

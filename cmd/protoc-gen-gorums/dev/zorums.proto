@@ -183,8 +183,9 @@ service ZorumsService {
   rpc CorrectableEmpty2(google.protobuf.Empty) returns (Response) {
     option (gorums.correctable) = true;
   }
-  rpc StrictOrdering(stream Request) returns (stream Response) {
-    option (gorums.qc_strict_ordering) = "MsgID";
+  rpc StrictOrdering(Request) returns (Response) {
+    option (gorums.qc) = true;
+    option (gorums.strict_ordering) = true;
   }
 
   // ---------------------------------------------------------------

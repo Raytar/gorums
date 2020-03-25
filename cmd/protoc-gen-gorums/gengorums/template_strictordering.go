@@ -3,30 +3,45 @@ package gengorums
 var strictOrderingVariables = `
 {{$serv := serviceName .Method}}
 {{$unexportMethod := unexport .Method.GoName}}
+{{$marshalAny := use "ptypes.MarshalAny" .GenFile}}
+{{$unmarshalAny := use "ptypes.UnmarshalAny" .GenFile}}
+{{$errorf := use "fmt.Errorf" .GenFile}}
+{{$gorumsMsg := use "gorums.Message" .GenFile}}
 `
 
 var strictOrderingPreamble = `
 	{{- template "trace" .}}
 
 	// get the ID which will be used to return the correct responses for a request
-	msgID := {{use "atomic.AddUint64" .GenFile}}(&c.mgr.{{$unexportMethod}}ID, 1)
-	in.{{msgIDField .Method}} = msgID
+	msgID := c.mgr.nextMsgID()
 	
 	// set up a channel to collect replies
-	replies := make(chan *{{$intOut}}, c.n)
-	c.mgr.{{$unexportMethod}}Lock.Lock()
-	c.mgr.{{$unexportMethod}}Recv[msgID] = replies
-	c.mgr.{{$unexportMethod}}Lock.Unlock()
+	replies := make(chan *strictOrderingResult, c.n)
+	c.mgr.recvQMut.Lock()
+	c.mgr.recvQ[msgID] = replies
+	c.mgr.recvQMut.Unlock()
 	
 	defer func() {
 		// remove the replies channel when we are done
-		c.mgr.{{$unexportMethod}}Lock.Lock()
-		delete(c.mgr.{{$unexportMethod}}Recv, msgID)
-		c.mgr.{{$unexportMethod}}Lock.Unlock()
+		c.mgr.recvQMut.Lock()
+		delete(c.mgr.recvQ, msgID)
+		c.mgr.recvQMut.Unlock()
 	}()
 `
 
 var strictOrderingLoop = `
+{{if not (hasPerNodeArg .Method) -}}
+	data, err := {{$marshalAny}}(in)
+	if err != nil {
+		return nil, {{$errorf}}("failed to marshal message: %w", err)
+	}
+	msg := &{{$gorumsMsg}}{
+		ID: msgID,
+		URL: "{{fullName .Method}}",
+		Data: data,
+	}
+{{end -}}
+
 	// push the message to the nodes
 	expected := c.n
 	for _, n := range c.nodes {
@@ -36,10 +51,19 @@ var strictOrderingLoop = `
 			expected--
 			continue
 		}
+		data, err := {{$marshalAny}}(nodeArg)
+		if err != nil {
+			return nil, {{$errorf}}("failed to marshal message: %w", err)
+		}
+		msg := &{{$gorumsMsg}}{
+			ID: msgID,
+			URL: "{{fullName .Method}}",
+			Data: data,
+		}
 		nodeArg.{{msgIDField .Method}} = msgID
-		n.{{$unexportMethod}}Send <- nodeArg
+		n.strictOrdering.sendQ <- msg
 {{- else}}
-		n.{{$unexportMethod}}Send <- in
+		n.strictOrdering.sendQ <- msg
 {{- end}}
 	}
 `
@@ -54,14 +78,18 @@ var strictOrderingReply = `
 	for {
 		select {
 		case r := <-replies:
-			// TODO: An error from SendMsg/RecvMsg means that the stream has closed, so we probably don't need to check
-			// for errors here.
 			if r.err != nil {
 				errs = append(errs, GRPCError{r.nid, r.err})
 				break
 			}
 			{{template "traceLazyLog"}}
-			replyValues = append(replyValues, r.reply)
+			reply := new({{$out}})
+			err := {{$unmarshalAny}}(r.reply, reply)
+			if err != nil {
+				errs = append(errs, GRPCError{r.nid, {{$errorf}}("failed to unmarshal reply: %w", err)})
+				break
+			}
+			replyValues = append(replyValues, reply)
 			if resp, quorum = c.qspec.{{$method}}QF({{withQFArg .Method "in, "}}replyValues); quorum {
 				return resp, nil
 			}
@@ -76,34 +104,31 @@ var strictOrderingReply = `
 }
 `
 
-var strictOrderingServerLoop = `
-// {{$method}}ServerLoop is a helper function that will receive messages on srv,
-// generate a response message using getResponse, and send the response back on
-// srv. The function returns when the stream ends, and returns the error that
-// caused it to end.
-func {{$method}}ServerLoop(srv {{$serv}}_{{$method}}Server, getResponse func(*{{$in}}) *{{$out}}) error {
-	ctx := srv.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		req, err := srv.Recv()
+var strictOrderingHandler = `
+// {{$method}}Handler is the server API for the {{$method}} rpc.
+type {{$method}}Handler interface {
+	{{$method}}(*{{$in}}) (*{{$out}})
+}
+
+func (m *strictOrderingManager) Register{{$method}}Handler(handler {{$method}}Handler) {
+	m.srv.registerHandler("{{fullName .Method}}", func(in *{{$gorumsMsg}}) *{{$gorumsMsg}} {
+		req := new({{$in}})
+		err := {{$unmarshalAny}}(in.GetData(), req)
+		// TODO: how to handle marshaling errors here
 		if err != nil {
-			return err
+			return new({{$gorumsMsg}})
 		}
-		resp := getResponse(req)
-		resp.{{msgIDField .Method}} = req.{{msgIDField .Method}}
-		err = srv.Send(resp)
+		resp := handler.{{$method}}(req)
+		data, err := {{$marshalAny}}(resp)
 		if err != nil {
-			return err
+			return new({{$gorumsMsg}})
 		}
-	}
+		return &{{$gorumsMsg}}{Data: data, URL: in.GetURL()}
+	})
 }
 `
 
-var strictOrderingCall = commonVariables +
+var strictOrderingQuorum = commonVariables +
 	quorumCallVariables +
 	strictOrderingVariables +
 	quorumCallComment +
@@ -111,4 +136,4 @@ var strictOrderingCall = commonVariables +
 	strictOrderingPreamble +
 	strictOrderingLoop +
 	strictOrderingReply +
-	strictOrderingServerLoop
+	strictOrderingHandler

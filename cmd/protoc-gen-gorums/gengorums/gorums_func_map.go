@@ -30,6 +30,7 @@ var importMap = map[string]protogen.GoImportPath{
 	"rand":    protogen.GoImportPath("math/rand"),
 	"backoff": protogen.GoImportPath("google.golang.org/grpc/backoff"),
 	"math":    protogen.GoImportPath("math"),
+	"ptypes":  protogen.GoImportPath("github.com/golang/protobuf/ptypes"),
 }
 
 func addImport(path, ident string, g *protogen.GeneratedFile) string {
@@ -121,7 +122,6 @@ var funcMap = template.FuncMap{
 	"contains":              strings.Contains,
 	"field":                 field,
 	"orderingMethods":       orderingMethods,
-	"msgIDField":            msgIDField,
 }
 
 type mapFunc func(*protogen.GeneratedFile, *protogen.Method, map[string]string)
@@ -230,10 +230,4 @@ func mustExecute(t *template.Template, data interface{}) string {
 		panic(err)
 	}
 	return b.String()
-}
-
-func msgIDField(method *protogen.Method) string {
-	ext := protoimpl.X.MessageOf(method.Desc.Options()).Interface()
-	idField := fmt.Sprintf("%v", proto.GetExtension(ext, gorums.E_QcStrictOrdering))
-	return idField
 }

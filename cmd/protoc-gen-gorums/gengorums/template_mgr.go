@@ -57,7 +57,7 @@ var manager = managerDataVariables + managerData + managerDataNew + managerDataC
 func orderingMethods(methods []*protogen.Method) []*protogen.Method {
 	var ordering []*protogen.Method
 	for _, m := range methods {
-		if hasMethodOption(m, gorums.E_QcStrictOrdering) {
+		if hasMethodOption(m, gorums.E_StrictOrdering) {
 			ordering = append(ordering, m)
 		}
 	}

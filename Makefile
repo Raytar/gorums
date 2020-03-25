@@ -36,9 +36,16 @@ install-tools: download
 	@echo Installing tools from tools.go
 	@cat tools.go | grep _ | awk -F'"' '{print $$2}' | xargs -tI % go install %
 
-gorums.pb.go: gorums.proto
+# intermediary step 'gorumsproto' needed until GNU Make 4.3
+# https://stackoverflow.com/a/59877127
+gorums.pb.go gorums_grpc.pb.go: gorumsproto
+
+gorumsproto: gorums.proto
 	@echo Generating gorums proto options
-	@protoc --go_out=paths=source_relative:. gorums.proto
+	@protoc --go_out=paths=source_relative:. \
+		--go-grpc_out=paths=source_relative:. \
+		gorums.proto
+
 
 installgorums: gorums.pb.go
 	@echo Installing protoc-gen-gorums compiler plugin for protoc
