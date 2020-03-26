@@ -22,6 +22,7 @@ var devTypes = []string{
 	"correctable_stream",
 	"multicast",
 	"strict_ordering_qc",
+	"strict_ordering_rpc",
 }
 
 func main() {

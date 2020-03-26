@@ -2,4 +2,4 @@
 
 package dev
 
-const numStrictOrderingMethods = 1
+const numStrictOrderingMethods = 2

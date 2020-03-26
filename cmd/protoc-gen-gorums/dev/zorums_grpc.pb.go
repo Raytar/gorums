@@ -102,6 +102,7 @@ type ZorumsServiceClient interface {
 	// Strict Ordering RPCs
 	// ---------------------------------------------------------------
 	StrictOrderingQC(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
+	StrictOrderingUnaryRPC(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error)
 }
 
 type zorumsServiceClient struct {
@@ -722,6 +723,15 @@ func (c *zorumsServiceClient) StrictOrderingQC(ctx context.Context, in *Request,
 	return out, nil
 }
 
+func (c *zorumsServiceClient) StrictOrderingUnaryRPC(ctx context.Context, in *Request, opts ...grpc.CallOption) (*Response, error) {
+	out := new(Response)
+	err := c.cc.Invoke(ctx, "/dev.ZorumsService/StrictOrderingUnaryRPC", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ZorumsServiceServer is the server API for ZorumsService service.
 type ZorumsServiceServer interface {
 	// GRPCCall plain gRPC call; testing that Gorums can ignore these, but that
@@ -804,6 +814,7 @@ type ZorumsServiceServer interface {
 	// Strict Ordering RPCs
 	// ---------------------------------------------------------------
 	StrictOrderingQC(context.Context, *Request) (*Response, error)
+	StrictOrderingUnaryRPC(context.Context, *Request) (*Response, error)
 }
 
 // UnimplementedZorumsServiceServer can be embedded to have forward compatible implementations.
@@ -917,6 +928,9 @@ func (*UnimplementedZorumsServiceServer) CorrectableStreamEmpty2(*empty.Empty, Z
 }
 func (*UnimplementedZorumsServiceServer) StrictOrderingQC(context.Context, *Request) (*Response, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StrictOrderingQC not implemented")
+}
+func (*UnimplementedZorumsServiceServer) StrictOrderingUnaryRPC(context.Context, *Request) (*Response, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StrictOrderingUnaryRPC not implemented")
 }
 
 func RegisterZorumsServiceServer(s *grpc.Server, srv ZorumsServiceServer) {
@@ -1632,6 +1646,24 @@ func _ZorumsService_StrictOrderingQC_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ZorumsService_StrictOrderingUnaryRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Request)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ZorumsServiceServer).StrictOrderingUnaryRPC(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/dev.ZorumsService/StrictOrderingUnaryRPC",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ZorumsServiceServer).StrictOrderingUnaryRPC(ctx, req.(*Request))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var _ZorumsService_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "dev.ZorumsService",
 	HandlerType: (*ZorumsServiceServer)(nil),
@@ -1731,6 +1763,10 @@ var _ZorumsService_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StrictOrderingQC",
 			Handler:    _ZorumsService_StrictOrderingQC_Handler,
+		},
+		{
+			MethodName: "StrictOrderingUnaryRPC",
+			Handler:    _ZorumsService_StrictOrderingUnaryRPC_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

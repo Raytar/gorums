@@ -1,8 +1,6 @@
 package gengorums
 
 var strictOrderingVariables = `
-{{$serv := serviceName .Method}}
-{{$unexportMethod := unexport .Method.GoName}}
 {{$marshalAny := use "ptypes.MarshalAny" .GenFile}}
 {{$unmarshalAny := use "ptypes.UnmarshalAny" .GenFile}}
 {{$errorf := use "fmt.Errorf" .GenFile}}

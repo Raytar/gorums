@@ -38,12 +38,13 @@ func newStrictOrderingManager() *strictOrderingManager {
 
 func (m *strictOrderingManager) createStream(node *Node, backoff *backoff.Config) *strictOrderingStream {
 	return &strictOrderingStream{
-		node:     node,
-		backoff:  backoff,
-		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
-		sendQ:    make(chan *gorums.Message),
-		recvQ:    m.recvQ,
-		recvQMut: &m.recvQMut,
+		node:      node,
+		nextMsgID: m.nextMsgID,
+		backoff:   backoff,
+		rand:      rand.New(rand.NewSource(time.Now().UnixNano())),
+		sendQ:     make(chan *gorums.Message),
+		recvQ:     m.recvQ,
+		recvQMut:  &m.recvQMut,
 	}
 }
 
@@ -52,8 +53,8 @@ func (m *strictOrderingManager) nextMsgID() uint64 {
 }
 
 type strictOrderingStream struct {
-	// needed for ID and setLastError
-	node         *Node
+	node         *Node         // needed for ID and setLastError
+	nextMsgID    func() uint64 // needed for Node RPC methods
 	backoff      *backoff.Config
 	rand         *rand.Rand
 	gorumsClient gorums.GorumsClient
