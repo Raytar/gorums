@@ -14,7 +14,6 @@ type managerOptions struct {
 	logger          *log.Logger
 	noConnect       bool
 	trace           bool
-	listenAddr      string
 	backoff         *backoff.Config
 }
 
@@ -59,14 +58,6 @@ func WithNoConnect() ManagerOption {
 func WithTracing() ManagerOption {
 	return func(o *managerOptions) {
 		o.trace = true
-	}
-}
-
-// WithListen sets the address which the manager will listen for strict ordering
-// requests on. If strict ordering is not used, then this option will have no effect.
-func WithListen(addr string) ManagerOption {
-	return func(o *managerOptions) {
-		o.listenAddr = addr
 	}
 }
 

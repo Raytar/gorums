@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"math/rand"
-	"net"
 	"sync"
 	atomic "sync/atomic"
 	"time"
@@ -25,56 +24,16 @@ type strictOrderingResult struct {
 
 type requestHandler func(*gorums.Message) *gorums.Message
 
-type strictOrderingServer struct {
-	handlers map[string]requestHandler
-}
-
-func newStrictOrderingServer() *strictOrderingServer {
-	return &strictOrderingServer{
-		handlers: make(map[string]requestHandler),
-	}
-}
-
-func (s *strictOrderingServer) registerHandler(url string, handler requestHandler) {
-	s.handlers[url] = handler
-}
-
-func (s *strictOrderingServer) StrictOrdering(srv gorums.Gorums_StrictOrderingServer) error {
-	for {
-		req, err := srv.Recv()
-		if err != nil {
-			return err
-		}
-		// handle the request if a handler is available for this rpc
-		if handler, ok := s.handlers[req.GetURL()]; ok {
-			resp := handler(req)
-			resp.ID = req.GetID()
-			err = srv.Send(resp)
-			if err != nil {
-				return err
-			}
-		}
-	}
-}
-
 type strictOrderingManager struct {
-	srv          *strictOrderingServer
-	gorumsServer *grpc.Server
-	msgID        uint64
-	recvQ        map[uint64]chan *strictOrderingResult
-	recvQMut     sync.RWMutex
+	msgID    uint64
+	recvQ    map[uint64]chan *strictOrderingResult
+	recvQMut sync.RWMutex
 }
 
 func newStrictOrderingManager() *strictOrderingManager {
 	return &strictOrderingManager{
 		recvQ: make(map[uint64]chan *strictOrderingResult),
 	}
-}
-
-func (m *strictOrderingManager) serve(listener net.Listener) {
-	m.gorumsServer = grpc.NewServer()
-	gorums.RegisterGorumsServer(m.gorumsServer, m.srv)
-	go m.gorumsServer.Serve(listener)
 }
 
 func (m *strictOrderingManager) createStream(node *Node, backoff *backoff.Config) *strictOrderingStream {
@@ -90,10 +49,6 @@ func (m *strictOrderingManager) createStream(node *Node, backoff *backoff.Config
 
 func (m *strictOrderingManager) nextMsgID() uint64 {
 	return atomic.AddUint64(&m.msgID, 1)
-}
-
-func (m *strictOrderingManager) stop() {
-	m.gorumsServer.GracefulStop()
 }
 
 type strictOrderingStream struct {

@@ -183,10 +183,6 @@ service ZorumsService {
   rpc CorrectableEmpty2(google.protobuf.Empty) returns (Response) {
     option (gorums.correctable) = true;
   }
-  rpc StrictOrdering(Request) returns (Response) {
-    option (gorums.qc) = true;
-    option (gorums.strict_ordering) = true;
-  }
 
   // ---------------------------------------------------------------
   // CorrectableStream variants
@@ -226,5 +222,13 @@ service ZorumsService {
   // type as Correctable: Response.
   rpc CorrectableStreamEmpty2(google.protobuf.Empty) returns (stream Response) {
     option (gorums.correctable_stream) = true;
+  }
+
+  // ---------------------------------------------------------------
+  // Strict Ordering RPCs
+  // ---------------------------------------------------------------
+  rpc StrictOrderingQC(Request) returns (Response) {
+    option (gorums.qc) = true;
+    option (gorums.strict_ordering) = true;
   }
 }

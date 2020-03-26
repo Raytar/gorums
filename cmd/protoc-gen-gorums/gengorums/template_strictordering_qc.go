@@ -60,7 +60,6 @@ var strictOrderingLoop = `
 			URL: "{{fullName .Method}}",
 			Data: data,
 		}
-		nodeArg.{{msgIDField .Method}} = msgID
 		n.strictOrdering.sendQ <- msg
 {{- else}}
 		n.strictOrdering.sendQ <- msg
@@ -110,8 +109,9 @@ type {{$method}}Handler interface {
 	{{$method}}(*{{$in}}) (*{{$out}})
 }
 
-func (m *strictOrderingManager) Register{{$method}}Handler(handler {{$method}}Handler) {
-	m.srv.registerHandler("{{fullName .Method}}", func(in *{{$gorumsMsg}}) *{{$gorumsMsg}} {
+// Register{{$method}}Handler sets the handler for {{$method}}.
+func (s *GorumsServer) Register{{$method}}Handler(handler {{$method}}Handler) {
+	s.srv.registerHandler("{{fullName .Method}}", func(in *{{$gorumsMsg}}) *{{$gorumsMsg}} {
 		req := new({{$in}})
 		err := {{$unmarshalAny}}(in.GetData(), req)
 		// TODO: how to handle marshaling errors here
@@ -128,7 +128,7 @@ func (m *strictOrderingManager) Register{{$method}}Handler(handler {{$method}}Ha
 }
 `
 
-var strictOrderingQuorum = commonVariables +
+var strictOrderingQC = commonVariables +
 	quorumCallVariables +
 	strictOrderingVariables +
 	quorumCallComment +

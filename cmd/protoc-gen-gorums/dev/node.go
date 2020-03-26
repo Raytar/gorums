@@ -30,8 +30,6 @@ type Node struct {
 
 	// embed generated nodeServices
 	nodeServices
-	// embed generated nodeData
-	*nodeData
 }
 
 // connect to this node to facilitate gRPC calls and optionally client streams.
@@ -46,7 +44,7 @@ func (n *Node) connect(opts managerOptions) error {
 	// a context for all of the streams
 	ctx, n.cancel = context.WithCancel(context.Background())
 	// only start strictOrdering RPCs when needed
-	if numStrictOrderingRPCs > 0 {
+	if numStrictOrderingMethods > 0 {
 		err = n.strictOrdering.connect(ctx, n.conn)
 		if err != nil {
 			return fmt.Errorf("starting stream failed: %w", err)

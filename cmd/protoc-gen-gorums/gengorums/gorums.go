@@ -54,7 +54,7 @@ func GenerateFile(gen *protogen.Plugin, file *protogen.File) *protogen.Generated
 // GenerateFileContent generates the Gorums service definitions, excluding the package statement.
 func GenerateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.GeneratedFile) {
 	data := servicesData{g, file.Services}
-	g.P(mustExecute(parseTemplate("Manager", manager), data))
+	g.P(mustExecute(parseTemplate("Globals", globals), data))
 	g.P()
 	g.P(mustExecute(parseTemplate("Node", node), data))
 	g.P()
@@ -64,15 +64,33 @@ func GenerateFileContent(gen *protogen.Plugin, file *protogen.File, g *protogen.
 	g.P()
 	genGorumsMethods(data, gorumsCallTypes...)
 	g.P()
+	// generate all strict ordering methods
+	var genMethods []*protoimpl.ExtensionInfo
+	copy(genMethods, gorumsCallTypes)
+	genMethods = append(genMethods, gorums.E_StrictOrdering)
+	genGorumsMethods(servicesData{g, file.Services}, genMethods...)
+	g.P()
 }
 
 func genGorumsMethods(data servicesData, methodOptions ...*protoimpl.ExtensionInfo) {
 	g := data.GenFile
+	genStrictOrdering := false
+	for _, method := range methodOptions {
+		if method == gorums.E_StrictOrdering {
+			genStrictOrdering = true
+		}
+	}
 	for _, service := range data.Services {
 		for _, method := range service.Methods {
+			isStrictOrdering := hasMethodOption(method, gorums.E_StrictOrdering)
 			if hasMethodOption(method, methodOptions...) {
-				fmt.Fprintf(os.Stderr, "processing %s\n", method.GoName)
-				g.P(genGorumsMethod(g, method))
+				if genStrictOrdering && isStrictOrdering {
+					fmt.Fprintf(os.Stderr, "processing %s\n", method.GoName)
+					g.P(genStrictOrderingMethod(g, method))
+				} else if !genStrictOrdering && !isStrictOrdering {
+					fmt.Fprintf(os.Stderr, "processing %s\n", method.GoName)
+					g.P(genGorumsMethod(g, method))
+				}
 			}
 		}
 	}
@@ -84,6 +102,18 @@ func genGorumsMethod(g *protogen.GeneratedFile, method *protogen.Method) string 
 		return mustExecute(parseTemplate(methodOption.Name, template), methodData{g, method})
 	}
 	panic(fmt.Sprintf("unknown method type %s\n", method.GoName))
+}
+
+func genStrictOrderingMethod(g *protogen.GeneratedFile, method *protogen.Method) string {
+	methodOption := validateMethodExtensions(method)
+	if !hasGorumsCallType(method) {
+		// TODO: generate a 'regular' RPC
+		panic("Not implemented")
+	}
+	if template, ok := strictOrderingCallTypeTemplates[methodOption]; ok {
+		return mustExecute(parseTemplate(methodOption.Name, template), methodData{g, method})
+	}
+	panic(fmt.Sprintf("unknown strict ordering method type %s\n", method.GoName))
 }
 
 func callTypeName(method *protogen.Method) string {
@@ -108,7 +138,7 @@ type methodData struct {
 // the given gorums type.
 func hasGorumsType(services []*protogen.Service, gorumsType string) bool {
 	// TODO(meling) try to avoid this loop slice; reuse devTypes??
-	for _, gType := range []string{"node", "qspec", "types", "manager"} {
+	for _, gType := range []string{"globals", "node", "qspec", "types"} {
 		if gorumsType == gType {
 			return true
 		}
@@ -129,7 +159,7 @@ var gorumsTypes = map[string]*protoimpl.ExtensionInfo{
 	gorums.E_Correctable.Name[index:]:       gorums.E_Correctable,
 	gorums.E_CorrectableStream.Name[index:]: gorums.E_CorrectableStream,
 	gorums.E_Multicast.Name[index:]:         gorums.E_Multicast,
-	gorums.E_StrictOrdering.Name[index:]:    gorums.E_StrictOrdering,
+	"strict_ordering_qc":                    gorums.E_StrictOrdering,
 }
 
 var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
@@ -138,7 +168,10 @@ var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       correctableCall,
 	gorums.E_CorrectableStream: correctableStreamCall,
 	gorums.E_Multicast:         multicastCall,
-	gorums.E_StrictOrdering:    strictOrderingQuorum,
+}
+
+var strictOrderingCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
+	gorums.E_Qc: strictOrderingQC,
 }
 
 var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
@@ -147,7 +180,6 @@ var gorumsCallTypeNames = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Correctable:       "correctable quorum",
 	gorums.E_CorrectableStream: "correctable stream quorum",
 	gorums.E_Multicast:         "multicast",
-	gorums.E_StrictOrdering:    "strict ordering quorum",
 }
 
 // gorumsCallTypes should list all available call types supported by Gorums.
@@ -158,7 +190,6 @@ var gorumsCallTypes = []*protoimpl.ExtensionInfo{
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
 	gorums.E_Multicast,
-	gorums.E_StrictOrdering,
 }
 
 // callTypesWithInternal should list all available call types that
@@ -169,7 +200,6 @@ var callTypesWithInternal = []*protoimpl.ExtensionInfo{
 	gorums.E_QcFuture,
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
-	gorums.E_StrictOrdering,
 }
 
 // callTypesWithPromiseObject lists all call types that returns
@@ -178,6 +208,10 @@ var callTypesWithPromiseObject = []*protoimpl.ExtensionInfo{
 	gorums.E_QcFuture,
 	gorums.E_Correctable,
 	gorums.E_CorrectableStream,
+}
+
+var strictOrderingCalltypes = []*protoimpl.ExtensionInfo{
+	gorums.E_Qc,
 }
 
 // hasGorumsCallType returns true if the given method has specified
@@ -241,7 +275,7 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 			"%s.%s: cannot combine non-quorum call method with the '%s' option",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_QfWithReq.Name)
 
-	case !hasMethodOption(method, gorums.E_Multicast, gorums.E_StrictOrdering) && method.Desc.IsStreamingClient():
+	case !hasMethodOption(method, gorums.E_Multicast) && method.Desc.IsStreamingClient():
 		log.Fatalf(
 			"%s.%s: client-server streams is only valid with the '%s' or '%s' options",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name, gorums.E_StrictOrdering.Name)
@@ -251,7 +285,7 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 			"%s.%s: '%s' option is only valid for client-server streams methods",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name)
 
-	case !hasMethodOption(method, gorums.E_CorrectableStream, gorums.E_StrictOrdering) && method.Desc.IsStreamingServer():
+	case !hasMethodOption(method, gorums.E_CorrectableStream) && method.Desc.IsStreamingServer():
 		log.Fatalf(
 			"%s.%s: server-client streams is only valid with the '%s' or '%s' options",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name, gorums.E_StrictOrdering.Name)
@@ -260,11 +294,6 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 		log.Fatalf(
 			"%s.%s: '%s' option is only valid for server-client streams",
 			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name)
-
-	case hasMethodOption(method, gorums.E_StrictOrdering) && (!method.Desc.IsStreamingClient() || !method.Desc.IsStreamingServer()):
-		log.Fatalf(
-			"%s.%s: '%s' option is only valid for bidirectional streams",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_StrictOrdering.Name)
 	}
 
 	return firstOption

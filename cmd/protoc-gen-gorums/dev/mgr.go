@@ -54,17 +54,6 @@ func NewManager(nodeAddrs []string, opts ...ManagerOption) (*Manager, error) {
 		))
 	}
 
-	if numStrictOrderingRPCs > 0 && m.opts.listenAddr != "" {
-		lis, err := net.Listen("tcp", m.opts.listenAddr)
-		if err != nil {
-			return nil, ManagerCreationError(
-				fmt.Errorf("Failed to listen for strict ordering requests: %w", err),
-			)
-		}
-
-		m.serve(lis)
-	}
-
 	for _, naddr := range nodeAddrs {
 		node, err2 := m.createNode(naddr)
 		if err2 != nil {
@@ -162,9 +151,6 @@ func (m *Manager) Close() {
 			m.eventLog.Printf("closing")
 		}
 		m.closeNodeConns()
-		if numStrictOrderingRPCs > 0 && m.opts.listenAddr != "" {
-			m.stop()
-		}
 	})
 }
 

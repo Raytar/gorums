@@ -104,24 +104,25 @@ var funcMap = template.FuncMap{
 	"in": func(g *protogen.GeneratedFile, method *protogen.Method) string {
 		return g.QualifiedGoIdent(method.Input.GoIdent)
 	},
-	"out":                   out,
-	"internalOut":           internalOut,
-	"customOut":             customOut,
-	"futureOut":             futureOut,
-	"correctableOut":        correctableOut,
-	"correctableStreamOut":  correctableStreamOut,
-	"mapInternalOutType":    mapInternalOutType,
-	"mapCorrectableOutType": mapCorrectableOutType,
-	"mapFutureOutType":      mapFutureOutType,
-	"streamMethods":         streamMethods,
-	"callTypeName":          callTypeName,
-	"qspecServices":         qspecServices,
-	"qspecMethods":          qspecMethods,
-	"unexport":              unexport,
-	"qcresult":              qcresult,
-	"contains":              strings.Contains,
-	"field":                 field,
-	"orderingMethods":       orderingMethods,
+	"out":                       out,
+	"internalOut":               internalOut,
+	"customOut":                 customOut,
+	"futureOut":                 futureOut,
+	"correctableOut":            correctableOut,
+	"correctableStreamOut":      correctableStreamOut,
+	"mapInternalOutType":        mapInternalOutType,
+	"mapCorrectableOutType":     mapCorrectableOutType,
+	"mapFutureOutType":          mapFutureOutType,
+	"streamMethods":             streamMethods,
+	"callTypeName":              callTypeName,
+	"qspecServices":             qspecServices,
+	"qspecMethods":              qspecMethods,
+	"unexport":                  unexport,
+	"qcresult":                  qcresult,
+	"contains":                  strings.Contains,
+	"field":                     field,
+	"numStrictOrderingMethods":  numStrictOrderingMethods,
+	"exclusivelyStrictOrdering": exclusivelyStrictOrdering,
 }
 
 type mapFunc func(*protogen.GeneratedFile, *protogen.Method, map[string]string)
@@ -230,4 +231,25 @@ func mustExecute(t *template.Template, data interface{}) string {
 		panic(err)
 	}
 	return b.String()
+}
+
+func numStrictOrderingMethods(services []*protogen.Service) int {
+	count := 0
+	for _, service := range services {
+		for _, method := range service.Methods {
+			if hasMethodOption(method, gorums.E_StrictOrdering) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func exclusivelyStrictOrdering(service *protogen.Service) bool {
+	for _, method := range service.Methods {
+		if !hasMethodOption(method, gorums.E_StrictOrdering) {
+			return false
+		}
+	}
+	return true
 }

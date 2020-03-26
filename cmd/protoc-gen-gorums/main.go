@@ -12,7 +12,7 @@ import (
 )
 
 var devTypes = []string{
-	"manager",
+	"globals",
 	"node",
 	"qspec",
 	"types",
@@ -21,7 +21,7 @@ var devTypes = []string{
 	"correctable",
 	"correctable_stream",
 	"multicast",
-	"qc_strict_ordering",
+	"strict_ordering_qc",
 }
 
 func main() {
