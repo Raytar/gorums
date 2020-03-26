@@ -44,7 +44,7 @@ var strictOrderingLoop = `
 	expected := c.n
 	for _, n := range c.nodes {
 {{- if hasPerNodeArg .Method}}
-		nodeArg := f(*in, n.ID())
+		nodeArg := f(in, n.ID())
 		if nodeArg == nil {
 			expected--
 			continue
