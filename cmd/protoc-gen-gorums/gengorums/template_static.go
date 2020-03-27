@@ -182,15 +182,18 @@ func NewManager(nodeAddrs []string, opts ...ManagerOption) (*Manager, error) {
 		lookup:                make(map[uint32]*Node),
 		configs:               make(map[uint32]*Configuration),
 		strictOrderingManager: newStrictOrderingManager(),
+		opts: managerOptions{
+			backoff: backoff.DefaultConfig,
+		},
 	}
 
 	for _, opt := range opts {
 		opt(&m.opts)
 	}
 
-	if m.opts.backoff != nil {
+	if m.opts.backoff != backoff.DefaultConfig {
 		m.opts.grpcDialOpts = append(m.opts.grpcDialOpts, grpc.WithConnectParams(
-			grpc.ConnectParams{Backoff: *m.opts.backoff},
+			grpc.ConnectParams{Backoff: m.opts.backoff},
 		))
 	}
 
@@ -651,7 +654,7 @@ type managerOptions struct {
 	logger          *log.Logger
 	noConnect       bool
 	trace           bool
-	backoff         *backoff.Config
+	backoff         backoff.Config
 }
 
 // ManagerOption provides a way to set different options on a new Manager.
@@ -699,7 +702,7 @@ func WithTracing() ManagerOption {
 }
 
 // WithBackoff allows for changing the backoff delays used by Gorums.
-func WithBackoff(backoff *backoff.Config) ManagerOption {
+func WithBackoff(backoff backoff.Config) ManagerOption {
 	return func(o *managerOptions) {
 		o.backoff = backoff
 	}
@@ -788,7 +791,7 @@ func newStrictOrderingManager() *strictOrderingManager {
 	}
 }
 
-func (m *strictOrderingManager) createStream(node *Node, backoff *backoff.Config) *strictOrderingStream {
+func (m *strictOrderingManager) createStream(node *Node, backoff backoff.Config) *strictOrderingStream {
 	return &strictOrderingStream{
 		node:      node,
 		nextMsgID: m.nextMsgID,
@@ -807,7 +810,7 @@ func (m *strictOrderingManager) nextMsgID() uint64 {
 type strictOrderingStream struct {
 	node         *Node         // needed for ID and setLastError
 	nextMsgID    func() uint64 // needed for Node RPC methods
-	backoff      *backoff.Config
+	backoff      backoff.Config
 	rand         *rand.Rand
 	gorumsClient gorums.GorumsClient
 	gorumsStream gorums.Gorums_StrictOrderingClient
@@ -902,10 +905,10 @@ func (s *strictOrderingStream) reconnectStream(ctx context.Context) {
 		}
 		delay := float64(s.backoff.BaseDelay)
 		max := float64(s.backoff.MaxDelay)
-		if retries > 0 {
-			delay = math.Pow(delay, retries)
-			delay = math.Min(delay, max)
+		for r := retries; delay < max && r > 0; r-- {
+			delay *= s.backoff.Multiplier
 		}
+		delay = math.Min(delay, max)
 		delay *= 1 + s.backoff.Jitter*(rand.Float64()*2-1)
 		select {
 		case <-time.After(time.Duration(delay)):
