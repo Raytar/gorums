@@ -182,12 +182,6 @@ var strictOrderingTypes = map[string]*protoimpl.ExtensionInfo{
 	strictordering.E_StrictOrderingRpc.Name[soIndex:]: strictordering.E_StrictOrderingRpc,
 }
 
-// strict ordering type to method options mapping
-var strictOrderingMethodOptions = map[string][]*protoimpl.ExtensionInfo{
-	strictordering.E_StrictOrderingQc.Name[soIndex:]:  {gorums.E_StrictOrdering, gorums.E_Qc},
-	strictordering.E_StrictOrderingRpc.Name[soIndex:]: {gorums.E_StrictOrdering},
-}
-
 var gorumsCallTypeTemplates = map[*protoimpl.ExtensionInfo]string{
 	gorums.E_Qc:                        quorumCall,
 	gorums.E_QcFuture:                  futureCall,
@@ -344,8 +338,8 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 
 	case !hasMethodOption(method, gorums.E_Multicast) && method.Desc.IsStreamingClient():
 		log.Fatalf(
-			"%s.%s: client-server streams is only valid with the '%s' or '%s' options",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name, gorums.E_StrictOrdering.Name)
+			"%s.%s: client-server streams is only valid with the '%s' option",
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_Multicast.Name)
 
 	case hasMethodOption(method, gorums.E_Multicast) && !method.Desc.IsStreamingClient():
 		log.Fatalf(
@@ -354,8 +348,8 @@ func validateMethodExtensions(method *protogen.Method) *protoimpl.ExtensionInfo 
 
 	case !hasMethodOption(method, gorums.E_CorrectableStream) && method.Desc.IsStreamingServer():
 		log.Fatalf(
-			"%s.%s: server-client streams is only valid with the '%s' or '%s' options",
-			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name, gorums.E_StrictOrdering.Name)
+			"%s.%s: server-client streams is only valid with the '%s' option",
+			method.Parent.Desc.Name(), method.Desc.Name(), gorums.E_CorrectableStream.Name)
 
 	case hasMethodOption(method, gorums.E_CorrectableStream) && !method.Desc.IsStreamingServer():
 		log.Fatalf(
