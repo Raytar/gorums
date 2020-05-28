@@ -66,3 +66,8 @@ qc: installgorums
 		--go-grpc_out=paths=source_relative:. \
 		--gorums_out=paths=source_relative,trace=true:. \
 		$(PLUGIN_TESTS_PATH)/quorumcall/quorumcall.proto
+
+benchmarks:
+	@$(MAKE) -C benchmark
+	@go build -o cmd/benchclient/benchclient ./cmd/benchclient
+	@go build -o cmd/benchserver/benchserver ./cmd/benchserver
