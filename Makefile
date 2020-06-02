@@ -7,7 +7,7 @@ PLUGIN_STATIC_FILE		:= $(PLUGIN_INTERNAL_PATH)/template_static.go
 # TODO clean up the make targets to include relevant dependent src files
 
 # TODO evaluate if these should be PHONY (dev and devsingle shouldn't, but need to make dependency handling)
-.PHONY: clean download install-tools dev devsingle
+.PHONY: clean download install-tools dev devsingle benchmark
 
 clean:
 	rm -f $(PLUGIN_STATIC_FILE).bak
@@ -67,7 +67,6 @@ qc: installgorums
 		--gorums_out=paths=source_relative,trace=true:. \
 		$(PLUGIN_TESTS_PATH)/quorumcall/quorumcall.proto
 
-benchmarks:
+benchmark:
 	@$(MAKE) -C benchmark
-	@go build -o cmd/benchclient/benchclient ./cmd/benchclient
-	@go build -o cmd/benchserver/benchserver ./cmd/benchserver
+	@go build -o cmd/benchmark/benchmark ./cmd/benchmark
