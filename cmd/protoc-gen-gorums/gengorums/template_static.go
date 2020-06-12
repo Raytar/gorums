@@ -24,6 +24,7 @@ var pkgIdentMap = map[string]string{
 	"math":                             "Min",
 	"math/rand":                        "Float64",
 	"net":                              "Listener",
+	"reflect":                          "Select",
 	"sort":                             "Sort",
 	"strconv":                          "Atoi",
 	"strings":                          "Join",
@@ -37,6 +38,7 @@ var pkgIdentMap = map[string]string{
 var reservedIdents = []string{
 	"ConfigNotFoundError",
 	"Configuration",
+	"Future",
 	"GRPCError",
 	"GorumsServer",
 	"IllegalConfigError",
@@ -1060,6 +1062,24 @@ func appendIfNotPresent(set []uint32, x uint32) []uint32 {
 		}
 	}
 	return append(set, x)
+}
+
+// Future is an object that will return a result in the future
+type Future interface {
+	getc() chan struct{}
+}
+
+// Select blocks until one of the futures is ready, and returns the index of that future
+func Select(futures []Future) int {
+	selectCases := make([]reflect.SelectCase, 0, len(futures))
+	for _, fut := range futures {
+		selectCases = append(selectCases, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(fut.getc()),
+		})
+	}
+	i, _, _ := reflect.Select(selectCases)
+	return i
 }
 
 `

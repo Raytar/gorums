@@ -49,6 +49,10 @@ type {{$futureOut}} struct {
 	c        chan struct{}
 }
 
+func (f *{{$futureOut}}) getc() chan struct{} {
+	return f.c
+}
+
 // Get returns the reply and any error associated with the called method.
 // The method blocks until a reply or error is available.
 func (f *{{$futureOut}}) Get() (*{{$customOut}}, error) {

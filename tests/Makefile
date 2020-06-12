@@ -1,22 +1,18 @@
-all: qf order
+.PHONY: all qf ordering future
 
-.PHONY: qf
-qf:
-	@protoc -I../:. \
-		--go_out=paths=source_relative:. \
-		--go-grpc_out=paths=source_relative:. \
-		--gorums_out=trace=true,paths=source_relative:. \
-		qf/qf.proto
+all: qf ordering future
 
-.PHONY: order
-order:
-	@protoc -I../:. \
-		--go_out=paths=source_relative:. \
-		--gorums_out=trace=true,paths=source_relative:. \
-		ordering/order.proto
+qf: qf/qf.pb.go qf/qf_grpc.pb.go qf/qf_gorums.pb.go
 
-.PHONY: clean
-clean:
-	@rm -f quorumcall/*.go
-	@rm -f grpc/*.go
-	@rm -f ordering/*.pb.go
+ordering: ordering/order.pb.go ordering/order_gorums.pb.go
+
+future: future/future.pb.go future/future_gorums.pb.go
+
+%.pb.go : %.proto
+	@protoc --go_out=paths=source_relative:. -I=../:. $^
+
+%_grpc.pb.go : %.proto
+	@protoc --go-grpc_out=paths=source_relative:. -I=../:. $^
+
+%_gorums.pb.go : %.proto
+	@protoc --gorums_out=trace=true,paths=source_relative:. -I=../:. $^

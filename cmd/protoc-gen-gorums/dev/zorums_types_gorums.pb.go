@@ -68,6 +68,10 @@ type FutureEmpty struct {
 	c       chan struct{}
 }
 
+func (f *FutureEmpty) getc() chan struct{} {
+	return f.c
+}
+
 // Get returns the reply and any error associated with the called method.
 // The method blocks until a reply or error is available.
 func (f *FutureEmpty) Get() (*empty.Empty, error) {
@@ -94,6 +98,10 @@ type FutureMyResponse struct {
 	c       chan struct{}
 }
 
+func (f *FutureMyResponse) getc() chan struct{} {
+	return f.c
+}
+
 // Get returns the reply and any error associated with the called method.
 // The method blocks until a reply or error is available.
 func (f *FutureMyResponse) Get() (*MyResponse, error) {
@@ -118,6 +126,10 @@ type FutureResponse struct {
 	NodeIDs []uint32
 	err     error
 	c       chan struct{}
+}
+
+func (f *FutureResponse) getc() chan struct{} {
+	return f.c
 }
 
 // Get returns the reply and any error associated with the called method.
