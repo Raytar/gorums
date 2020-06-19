@@ -46,6 +46,7 @@ func main() {
 		}
 		for _, f := range gen.Files {
 			if f.Generate {
+				gengorums.GenerateNodeStreamProto(gen, f)
 				switch {
 				case *dev:
 					fmt.Fprintf(os.Stderr, "Generating development files in dev folder\n")

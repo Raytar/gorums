@@ -3,8 +3,12 @@ package gengorums
 
 import (
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 
 	"github.com/relab/gorums"
@@ -14,6 +18,38 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/runtime/protoimpl"
 )
+
+func GenerateNodeStreamProto(gen *protogen.Plugin, file *protogen.File) {
+	if !gorumsGuard(file) {
+		return
+	}
+	filename := file.GeneratedFilenamePrefix + "_nodestream_gorums.pb.go"
+	g := gen.NewGeneratedFile(filename, file.GoImportPath)
+	tmpDir, err := ioutil.TempDir("", "gorums")
+	if err != nil {
+		log.Fatalf("Failed to create temporary directory: %v\n", err)
+	}
+	// defer os.RemoveAll(tmpDir)
+	protoFile, err := os.Create(filepath.Join(tmpDir, "nodestream.proto"))
+	if err != nil {
+		log.Fatalf("Failed to create temporary file: %v\n", err)
+	}
+	protoFile.WriteString(mustExecute(parseTemplate("nodestream_proto", nodeStreamProto), file))
+	includePath := filepath.Dir(file.Desc.Path())
+	cmd := exec.Command("protoc", fmt.Sprintf("-I=%s:%s", includePath, tmpDir), fmt.Sprintf("--go_out=%s", tmpDir), protoFile.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Fatalf("Failed to run protoc: %v\nOutput:\n%s\n", err, out)
+	}
+	genFile, err := os.Open(filepath.Join(tmpDir, "nodestream.pb.go"))
+	if err != nil {
+		log.Fatalf("Failed to open generated file: %v\n", err)
+	}
+	_, err = io.Copy(g, genFile)
+	if err != nil {
+		log.Fatalf("Failed to write generated file: %v\n", err)
+	}
+}
 
 // GenerateFile generates a _gorums.pb.go file containing Gorums service definitions.
 func GenerateFile(gen *protogen.Plugin, file *protogen.File) {
