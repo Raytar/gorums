@@ -19,7 +19,11 @@ var orderingMethods = `
 var orderingMethods = map[int32]methodInfo{
 	{{$methods := methods .Services}}
 	{{range $index, $method := nodeStreamMethods $methods}}
-		{{$index}}: { oneway: {{isOneway $method}}, concurrent: {{ isConcurrent $method }} },
+		{{$index}}: { 
+			oneway: {{isOneway $method}},
+			concurrent: {{isConcurrent $method}} },
+			reqType: &{{in $method}}{}
+			respType: &{{out $method}}{}
 	{{- end}}
 }
 `

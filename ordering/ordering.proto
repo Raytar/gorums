@@ -5,8 +5,10 @@ option go_package = "github.com/relab/gorums/ordering";
 
 service Gorums { rpc NodeStream(stream Message) returns (stream Message); }
 
-message Message {
-  uint64 ID = 1;
+// Dummy message. We will send application-specific messages with embedded metadata instead
+message Message {}
+
+message Metadata {
+  uint64 MessageID = 1;
   int32 MethodID = 2;
-  bytes Data = 3;
 }

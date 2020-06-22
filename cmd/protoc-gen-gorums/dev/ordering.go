@@ -13,16 +13,25 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type methodInfo struct {
 	oneway     bool
 	concurrent bool
+	reqType    protoreflect.Message
+	respType   protoreflect.Message
+}
+
+type orderingRequest struct {
+	id       uint64
+	methodID int32
+	msg      protoreflect.Message
 }
 
 type orderingResult struct {
 	nid   uint32
-	reply []byte
+	reply protoreflect.Message
 	err   error
 }
 
@@ -65,7 +74,7 @@ func (m *receiveQueue) putResult(id uint64, result *orderingResult) {
 
 type orderedNodeStream struct {
 	*receiveQueue
-	sendQ        chan *ordering.Message
+	sendQ        chan orderingRequest
 	node         *Node // needed for ID and setLastError
 	backoff      backoff.Config
 	rand         *rand.Rand
@@ -88,7 +97,7 @@ func (s *orderedNodeStream) connectOrderedStream(ctx context.Context, conn *grpc
 }
 
 func (s *orderedNodeStream) sendMsgs(ctx context.Context) {
-	var req *ordering.Message
+	var req orderingRequest
 	for {
 		select {
 		case <-ctx.Done():
@@ -98,7 +107,7 @@ func (s *orderedNodeStream) sendMsgs(ctx context.Context) {
 		// return error if stream is broken
 		if s.streamBroken {
 			err := status.Errorf(codes.Unavailable, "stream is down")
-			s.putResult(req.GetID(), &orderingResult{nid: s.node.ID(), reply: nil, err: err})
+			s.putResult(req.id, &orderingResult{nid: s.node.ID(), reply: nil, err: err})
 			continue
 		}
 		// else try to send message
@@ -112,7 +121,7 @@ func (s *orderedNodeStream) sendMsgs(ctx context.Context) {
 		s.streamMut.RUnlock()
 		s.node.setLastErr(err)
 		// return the error
-		s.putResult(req.GetID(), &orderingResult{nid: s.node.ID(), reply: nil, err: err})
+		s.putResult(req.id, &orderingResult{nid: s.node.ID(), reply: nil, err: err})
 	}
 }
 

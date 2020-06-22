@@ -28,15 +28,10 @@ var orderingPreamble = `
 
 var orderingLoop = `
 {{if not (hasPerNodeArg .Method) -}}
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, {{$errorf}}("failed to marshal message: %w", err)
-	}
-	msg := &{{$gorumsMsg}}{
-		ID: msgID,
-		MethodID: {{$unexportMethod}}MethodID,
-		Data: data,
-	}
+	req := orderingRequest{
+			id: msgID,
+			msg: in.ProtoReflect(),
+		}
 {{end -}}
 
 	// push the message to the nodes
@@ -48,17 +43,12 @@ var orderingLoop = `
 			expected--
 			continue
 		}
-		data, err := marshaler.Marshal(nodeArg)
-		if err != nil {
-			return nil, {{$errorf}}("failed to marshal message: %w", err)
-		}
-		msg := &{{$gorumsMsg}}{
-			ID: msgID,
-			MethodID: {{$unexportMethod}}MethodID,
-			Data: data,
+		req := orderingRequest{
+			id: msgID,
+			msg: data.ProtoReflect(),
 		}
 {{- end}}
-		n.sendQ <- msg
+		n.sendQ <- req
 	}
 `
 
