@@ -7,19 +7,13 @@ import (
 	context "context"
 	binary "encoding/binary"
 	fmt "fmt"
-	empty "github.com/golang/protobuf/ptypes/empty"
-	ordering "github.com/relab/gorums/ordering"
 	trace "golang.org/x/net/trace"
 	grpc "google.golang.org/grpc"
-	backoff "google.golang.org/grpc/backoff"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
-	proto "google.golang.org/protobuf/proto"
 	fnv "hash/fnv"
 	io "io"
 	log "log"
-	math "math"
-	rand "math/rand"
 	net "net"
 	sort "sort"
 	strconv "strconv"
@@ -38,21 +32,6 @@ type Configuration struct {
 	mgr   *Manager
 	qspec QuorumSpec
 	errs  chan GRPCError
-}
-
-// NewConfig returns a configuration for the given node addresses and quorum spec.
-// The returned func() must be called to close the underlying connections.
-// This is experimental API.
-func NewConfig(addrs []string, qspec QuorumSpec, opts ...ManagerOption) (*Configuration, func(), error) {
-	man, err := NewManager(addrs, opts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create manager: %v", err)
-	}
-	c, err := man.NewConfiguration(man.NodeIDs(), qspec)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create configuration: %v", err)
-	}
-	return c, func() { man.Close() }, nil
 }
 
 // ID reports the identifier for the configuration.
@@ -180,7 +159,8 @@ type Manager struct {
 	logger    *log.Logger
 	opts      managerOptions
 
-	*receiveQueue
+	// embed generated managerData
+	*managerData
 }
 
 // NewManager attempts to connect to the given set of node addresses and if
@@ -191,20 +171,13 @@ func NewManager(nodeAddrs []string, opts ...ManagerOption) (*Manager, error) {
 	}
 
 	m := &Manager{
-		lookup:       make(map[uint32]*Node),
-		configs:      make(map[uint32]*Configuration),
-		receiveQueue: newReceiveQueue(),
-		opts:         newManagerOptions(),
+		lookup:      make(map[uint32]*Node),
+		configs:     make(map[uint32]*Configuration),
+		managerData: newManagerData(),
 	}
 
 	for _, opt := range opts {
 		opt(&m.opts)
-	}
-
-	if m.opts.backoff != backoff.DefaultConfig {
-		m.opts.grpcDialOpts = append(m.opts.grpcDialOpts, grpc.WithConnectParams(
-			grpc.ConnectParams{Backoff: m.opts.backoff},
-		))
 	}
 
 	for _, naddr := range nodeAddrs {
@@ -255,11 +228,11 @@ func (m *Manager) createNode(addr string) (*Node, error) {
 	}
 
 	node := &Node{
-		id:      id,
-		addr:    tcpAddr.String(),
-		latency: -1 * time.Second,
+		id:       id,
+		addr:     tcpAddr.String(),
+		latency:  -1 * time.Second,
+		nodeData: m.createNodeData(),
 	}
-	node.createOrderedStream(m.receiveQueue, m.opts)
 
 	return node, nil
 }
@@ -390,29 +363,29 @@ func (m *Manager) NewConfiguration(ids []uint32, qspec QuorumSpec) (*Configurati
 		return nil, IllegalConfigError("need at least one node")
 	}
 
-	var nodes []*Node
+	var cnodes []*Node
 	unique := make(map[uint32]struct{})
-	var uniqueIDs []uint32
+	var deduped []uint32
 	for _, nid := range ids {
-		// ensure that identical IDs are only counted once
+		// Ensure that identical ids are only counted once.
 		if _, duplicate := unique[nid]; duplicate {
 			continue
 		}
 		unique[nid] = struct{}{}
-		uniqueIDs = append(uniqueIDs, nid)
+		deduped = append(deduped, nid)
 
 		node, found := m.lookup[nid]
 		if !found {
 			return nil, NodeNotFoundError(nid)
 		}
-		nodes = append(nodes, node)
+		cnodes = append(cnodes, node)
 	}
 
-	// node IDs are sorted to ensure a globally consistent configuration ID
-	sort.Sort(idSlice(uniqueIDs))
+	// Node ids are sorted ensure a globally consistent configuration id.
+	sort.Sort(idSlice(deduped))
 
 	h := fnv.New32a()
-	for _, id := range uniqueIDs {
+	for _, id := range deduped {
 		binary.Write(h, binary.LittleEndian, id)
 	}
 	cid := h.Sum32()
@@ -424,8 +397,8 @@ func (m *Manager) NewConfiguration(ids []uint32, qspec QuorumSpec) (*Configurati
 
 	c := &Configuration{
 		id:    cid,
-		nodes: nodes,
-		n:     len(nodes),
+		nodes: cnodes,
+		n:     len(cnodes),
 		mgr:   m,
 		qspec: qspec,
 	}
@@ -451,25 +424,13 @@ type Node struct {
 	id      uint32
 	addr    string
 	conn    *grpc.ClientConn
-	cancel  func()
 	mu      sync.Mutex
 	lastErr error
 	latency time.Duration
-
-	*orderedNodeStream
-
 	// embed generated nodeServices
 	nodeServices
-}
-
-func (n *Node) createOrderedStream(rq *receiveQueue, opts managerOptions) {
-	n.orderedNodeStream = &orderedNodeStream{
-		receiveQueue: rq,
-		sendQ:        make(chan *ordering.Message, opts.sendBuffer),
-		node:         n,
-		backoff:      opts.backoff,
-		rand:         rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
+	// embed generated nodeData
+	*nodeData
 }
 
 // connect to this node to facilitate gRPC calls and optionally client streams.
@@ -481,16 +442,7 @@ func (n *Node) connect(opts managerOptions) error {
 	if err != nil {
 		return fmt.Errorf("dialing node failed: %w", err)
 	}
-	// a context for all of the streams
-	ctx, n.cancel = context.WithCancel(context.Background())
-	// only start ordering RPCs when needed
-	if hasOrderingMethods {
-		err = n.connectOrderedStream(ctx, n.conn)
-		if err != nil {
-			return fmt.Errorf("starting stream failed: %w", err)
-		}
-	}
-	return n.connectStream(ctx) // call generated method
+	return n.connectStream() // call generated method
 }
 
 // close this node for further calls and optionally stream.
@@ -498,9 +450,7 @@ func (n *Node) close() error {
 	if err := n.conn.Close(); err != nil {
 		return fmt.Errorf("%d: conn close error: %w", n.id, err)
 	}
-	err := n.closeStream() // call generated method
-	n.cancel()
-	return err
+	return n.closeStream() // call generated method
 }
 
 // ID returns the ID of n.
@@ -656,6 +606,7 @@ var Latency = func(n1, n2 *Node) bool {
 		return false
 	}
 	return n1.latency < n2.latency
+
 }
 
 // Error sorts nodes by their LastErr() status in increasing order. A
@@ -673,15 +624,6 @@ type managerOptions struct {
 	logger          *log.Logger
 	noConnect       bool
 	trace           bool
-	backoff         backoff.Config
-	sendBuffer      uint
-}
-
-func newManagerOptions() managerOptions {
-	return managerOptions{
-		backoff:    backoff.DefaultConfig,
-		sendBuffer: 0,
-	}
 }
 
 // ManagerOption provides a way to set different options on a new Manager.
@@ -719,317 +661,13 @@ func WithNoConnect() ManagerOption {
 	}
 }
 
-// WithTracing controls whether to trace quorum calls for this Manager instance
+// WithTracing controls whether to trace qourum calls for this Manager instance
 // using the golang.org/x/net/trace package. Tracing is currently only supported
 // for regular quorum calls.
 func WithTracing() ManagerOption {
 	return func(o *managerOptions) {
 		o.trace = true
 	}
-}
-
-// WithBackoff allows for changing the backoff delays used by Gorums.
-func WithBackoff(backoff backoff.Config) ManagerOption {
-	return func(o *managerOptions) {
-		o.backoff = backoff
-	}
-}
-
-// WithSendBufferSize allows for changing the size of the send buffer used by Gorums.
-// A larger buffer might achieve higher throughput for asynchronous calltypes, but at
-// the cost of latency.
-func WithSendBufferSize(size uint) ManagerOption {
-	return func(o *managerOptions) {
-		o.sendBuffer = size
-	}
-}
-
-type methodInfo struct {
-	oneway     bool
-	concurrent bool
-}
-
-type orderingResult struct {
-	nid   uint32
-	reply []byte
-	err   error
-}
-
-type receiveQueue struct {
-	msgID    uint64
-	recvQ    map[uint64]chan *orderingResult
-	recvQMut sync.RWMutex
-}
-
-func newReceiveQueue() *receiveQueue {
-	return &receiveQueue{
-		recvQ: make(map[uint64]chan *orderingResult),
-	}
-}
-
-func (m *receiveQueue) nextMsgID() uint64 {
-	return atomic.AddUint64(&m.msgID, 1)
-}
-
-func (m *receiveQueue) putChan(id uint64, c chan *orderingResult) {
-	m.recvQMut.Lock()
-	m.recvQ[id] = c
-	m.recvQMut.Unlock()
-}
-
-func (m *receiveQueue) deleteChan(id uint64) {
-	m.recvQMut.Lock()
-	delete(m.recvQ, id)
-	m.recvQMut.Unlock()
-}
-
-func (m *receiveQueue) putResult(id uint64, result *orderingResult) {
-	m.recvQMut.RLock()
-	c, ok := m.recvQ[id]
-	m.recvQMut.RUnlock()
-	if ok {
-		c <- result
-	}
-}
-
-type orderedNodeStream struct {
-	*receiveQueue
-	sendQ        chan *ordering.Message
-	node         *Node // needed for ID and setLastError
-	backoff      backoff.Config
-	rand         *rand.Rand
-	gorumsClient ordering.GorumsClient
-	gorumsStream ordering.Gorums_NodeStreamClient
-	streamMut    sync.RWMutex
-	streamBroken bool
-}
-
-func (s *orderedNodeStream) connectOrderedStream(ctx context.Context, conn *grpc.ClientConn) error {
-	var err error
-	s.gorumsClient = ordering.NewGorumsClient(conn)
-	s.gorumsStream, err = s.gorumsClient.NodeStream(ctx)
-	if err != nil {
-		return err
-	}
-	go s.sendMsgs(ctx)
-	go s.recvMsgs(ctx)
-	return nil
-}
-
-func (s *orderedNodeStream) sendMsgs(ctx context.Context) {
-	var req *ordering.Message
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case req = <-s.sendQ:
-		}
-		// return error if stream is broken
-		if s.streamBroken {
-			err := status.Errorf(codes.Unavailable, "stream is down")
-			s.putResult(req.GetID(), &orderingResult{nid: s.node.ID(), reply: nil, err: err})
-			continue
-		}
-		// else try to send message
-		s.streamMut.RLock()
-		err := s.gorumsStream.SendMsg(req)
-		if err == nil {
-			s.streamMut.RUnlock()
-			continue
-		}
-		s.streamBroken = true
-		s.streamMut.RUnlock()
-		s.node.setLastErr(err)
-		// return the error
-		s.putResult(req.GetID(), &orderingResult{nid: s.node.ID(), reply: nil, err: err})
-	}
-}
-
-func (s *orderedNodeStream) recvMsgs(ctx context.Context) {
-	for {
-		resp := new(ordering.Message)
-		s.streamMut.RLock()
-		err := s.gorumsStream.RecvMsg(resp)
-		if err != nil {
-			s.streamBroken = true
-			s.streamMut.RUnlock()
-			s.node.setLastErr(err)
-			// attempt to reconnect
-			s.reconnectStream(ctx)
-		} else {
-			s.streamMut.RUnlock()
-			s.putResult(resp.GetID(), &orderingResult{nid: s.node.ID(), reply: resp.GetData(), err: nil})
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-	}
-}
-
-func (s *orderedNodeStream) reconnectStream(ctx context.Context) {
-	s.streamMut.Lock()
-	defer s.streamMut.Unlock()
-
-	var retries float64
-	for {
-		var err error
-		s.gorumsStream, err = s.gorumsClient.NodeStream(ctx)
-		if err == nil {
-			s.streamBroken = false
-			return
-		}
-		s.node.setLastErr(err)
-		delay := float64(s.backoff.BaseDelay)
-		max := float64(s.backoff.MaxDelay)
-		for r := retries; delay < max && r > 0; r-- {
-			delay *= s.backoff.Multiplier
-		}
-		delay = math.Min(delay, max)
-		delay *= 1 + s.backoff.Jitter*(rand.Float64()*2-1)
-		select {
-		case <-time.After(time.Duration(delay)):
-			retries++
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// requestHandler is used to fetch a response message based on the request.
-// A requestHandler should receive a message from the server, unmarshal it into
-// the proper type for that Method's request type, call a user provided Handler,
-// and return a marshaled result to the server.
-type requestHandler func(*ordering.Message) *ordering.Message
-
-type orderingServer struct {
-	handlers map[int32]requestHandler
-	opts     serverOptions
-}
-
-func newOrderingServer(opts []ServerOption) *orderingServer {
-	s := &orderingServer{
-		handlers: make(map[int32]requestHandler),
-	}
-	for _, opt := range opts {
-		opt(&s.opts)
-	}
-	return s
-}
-
-func (s *orderingServer) registerHandler(methodID int32, handler requestHandler) {
-	s.handlers[methodID] = handler
-}
-
-func (s *orderingServer) NodeStream(srv ordering.Gorums_NodeStreamServer) error {
-	finished := make(chan *ordering.Message, s.opts.buffer)
-	ordered := make(chan struct {
-		msg  *ordering.Message
-		info methodInfo
-	}, s.opts.buffer)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	handleMsg := func(req *ordering.Message, info methodInfo) {
-		if handler, ok := s.handlers[req.GetMethodID()]; ok {
-			if info.oneway {
-				handler(req)
-			} else {
-				finished <- handler(req)
-			}
-		}
-	}
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg := <-finished:
-				err := srv.Send(msg)
-				if err != nil {
-					return
-				}
-			}
-		}
-	}()
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case req := <-ordered:
-				handleMsg(req.msg, req.info)
-			}
-		}
-	}()
-
-	for {
-		req, err := srv.Recv()
-		if err != nil {
-			return err
-		}
-
-		if info, ok := orderingMethods[req.MethodID]; ok {
-			if info.concurrent {
-				go handleMsg(req, info)
-			} else {
-				ordered <- struct {
-					msg  *ordering.Message
-					info methodInfo
-				}{req, info}
-			}
-		}
-	}
-}
-
-type serverOptions struct {
-	buffer uint
-}
-
-// ServerOption is used to change settings for the GorumsServer
-type ServerOption func(*serverOptions)
-
-// WithServerBufferSize sets the buffer size for the server.
-// A larger buffer may result in higher throughput at the cost of higher latency.
-func WithServerBufferSize(size uint) ServerOption {
-	return func(o *serverOptions) {
-		o.buffer = size
-	}
-}
-
-// GorumsServer serves all ordering based RPCs using registered handlers.
-type GorumsServer struct {
-	srv        *orderingServer
-	grpcServer *grpc.Server
-}
-
-// NewGorumsServer returns a new instance of GorumsServer.
-func NewGorumsServer(opts ...ServerOption) *GorumsServer {
-	s := &GorumsServer{
-		srv:        newOrderingServer(opts),
-		grpcServer: grpc.NewServer(),
-	}
-	ordering.RegisterGorumsServer(s.grpcServer, s.srv)
-	return s
-}
-
-// Serve starts serving on the listener.
-func (s *GorumsServer) Serve(listener net.Listener) {
-	s.grpcServer.Serve(listener)
-}
-
-// GracefulStop waits for all RPCs to finish before stopping.
-func (s *GorumsServer) GracefulStop() {
-	s.grpcServer.GracefulStop()
-}
-
-// Stop stops the server immediately.
-func (s *GorumsServer) Stop() {
-	s.grpcServer.Stop()
 }
 
 type traceInfo struct {
@@ -1084,17 +722,6 @@ func (q qcresult) String() string {
 	return out.String()
 }
 
-var (
-	marshaler = proto.MarshalOptions{
-		AllowPartial:  true,
-		Deterministic: true,
-	}
-	unmarshaler = proto.UnmarshalOptions{
-		AllowPartial:   true,
-		DiscardUnknown: true,
-	}
-)
-
 func appendIfNotPresent(set []uint32, x uint32) []uint32 {
 	for _, y := range set {
 		if y == x {
@@ -1104,159 +731,197 @@ func appendIfNotPresent(set []uint32, x uint32) []uint32 {
 	return append(set, x)
 }
 
-// UnorderedAsync asynchronously invokes a quorum call on configuration c
-// and returns a FutureEcho, which can be used to inspect the quorum call
-// reply and error when available.
-func (c *Configuration) UnorderedAsync(ctx context.Context, in *Echo, opts ...grpc.CallOption) *FutureEcho {
-	fut := &FutureEcho{
-		NodeIDs: make([]uint32, 0, c.n),
-		c:       make(chan struct{}, 1),
-	}
-	go func() {
-		defer close(fut.c)
-		c.unorderedAsync(ctx, in, fut, opts...)
-	}()
-	return fut
+type managerData struct {
+	orderedQCID   uint64
+	orderedQCRecv map[uint64]chan *internalEcho
+	orderedQCLock sync.RWMutex
+
+	orderedSlowServerID   uint64
+	orderedSlowServerRecv map[uint64]chan *internalEcho
+	orderedSlowServerLock sync.RWMutex
 }
 
-func (c *Configuration) unorderedAsync(ctx context.Context, in *Echo, resp *FutureEcho, opts ...grpc.CallOption) {
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "UnorderedAsync")
-		defer ti.Finish()
-
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: in}, false)
-
-		defer func() {
-			ti.LazyLog(&qcresult{ids: resp.NodeIDs, reply: resp.Echo, err: resp.err}, false)
-			if resp.err != nil {
-				ti.SetError()
-			}
-		}()
-	}
-
-	expected := c.n
-	replyChan := make(chan internalEcho, expected)
-	for _, n := range c.nodes {
-		go n.UnorderedAsync(ctx, in, replyChan)
-	}
-
-	var (
-		replyValues = make([]*Echo, 0, c.n)
-		reply       *Echo
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replyChan:
-			resp.NodeIDs = append(resp.NodeIDs, r.nid)
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-
-			if c.mgr.opts.trace {
-				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
-			}
-
-			replyValues = append(replyValues, r.reply)
-			if reply, quorum = c.qspec.UnorderedAsyncQF(in, replyValues); quorum {
-				resp.Echo, resp.err = reply, nil
-				return
-			}
-		case <-ctx.Done():
-			resp.Echo, resp.err = reply, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-			return
-		}
-		if len(errs)+len(replyValues) == expected {
-			resp.Echo, resp.err = reply, QuorumCallError{"incomplete call", len(replyValues), errs}
-			return
-		}
+func newManagerData() *managerData {
+	return &managerData{
+		orderedQCRecv: make(map[uint64]chan *internalEcho), orderedSlowServerRecv: make(map[uint64]chan *internalEcho),
 	}
 }
 
-func (n *Node) UnorderedAsync(ctx context.Context, in *Echo, replyChan chan<- internalEcho) {
-	reply := new(Echo)
-	start := time.Now()
-	err := n.conn.Invoke(ctx, "/benchmark.Benchmark/UnorderedAsync", in, reply)
-	s, ok := status.FromError(err)
-	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
-		n.setLatency(time.Since(start))
-	} else {
-		n.setLastErr(err)
+func (m *managerData) createNodeData() *nodeData {
+	return &nodeData{
+		orderedQCSend: make(chan *Echo, 1),
+		orderedQCRecv: m.orderedQCRecv,
+		orderedQCLock: &m.orderedQCLock, orderedSlowServerSend: make(chan *Echo, 1),
+		orderedSlowServerRecv: m.orderedSlowServerRecv,
+		orderedSlowServerLock: &m.orderedSlowServerLock,
 	}
-	replyChan <- internalEcho{n.id, reply, err}
-}
-
-// Reference imports to suppress errors if they are not otherwise used.
-var _ empty.Empty
-
-// Multicast is a one-way multicast call on all nodes in configuration c,
-// with the same in argument. The call is asynchronous and has no return value.
-func (c *Configuration) Multicast(in *TimedMsg) error {
-	msgID := c.mgr.nextMsgID()
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: multicastMethodID,
-		Data:     data,
-	}
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-	return nil
-}
-
-// Reference imports to suppress errors if they are not otherwise used.
-var _ empty.Empty
-
-// ConcurrentMulticast is a one-way multicast call on all nodes in configuration c,
-// with the same in argument. The call is asynchronous and has no return value.
-func (c *Configuration) ConcurrentMulticast(in *TimedMsg) error {
-	msgID := c.mgr.nextMsgID()
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: concurrentMulticastMethodID,
-		Data:     data,
-	}
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-	return nil
 }
 
 type nodeServices struct {
 	BenchmarkClient
+	orderedQCClient         Benchmark_OrderedQCClient
+	orderedSlowServerClient Benchmark_OrderedSlowServerClient
 }
 
-func (n *Node) connectStream(ctx context.Context) (err error) {
-
+func (n *Node) connectStream() (err error) {
 	n.BenchmarkClient = NewBenchmarkClient(n.conn)
-
+	n.orderedQCClient, err = n.BenchmarkClient.OrderedQC(context.Background())
+	if err != nil {
+		return fmt.Errorf("stream creation failed: %v", err)
+	}
+	n.orderedSlowServerClient, err = n.BenchmarkClient.OrderedSlowServer(context.Background())
+	if err != nil {
+		return fmt.Errorf("stream creation failed: %v", err)
+	}
+	go n.orderedQCSendMsgs()
+	go n.orderedQCRecvMsgs()
+	go n.orderedSlowServerSendMsgs()
+	go n.orderedSlowServerRecvMsgs()
 	return nil
 }
 
 func (n *Node) closeStream() (err error) {
+	err = n.orderedQCClient.CloseSend()
+	err = n.orderedSlowServerClient.CloseSend()
+	close(n.orderedQCSend)
+	close(n.orderedSlowServerSend)
 	return err
+}
+
+func (n *Node) orderedQCSendMsgs() {
+	for msg := range n.orderedQCSend {
+		err := n.orderedQCClient.SendMsg(msg)
+		if err != nil {
+			if err != io.EOF {
+				n.setLastErr(err)
+			}
+			return
+		}
+	}
+}
+
+func (n *Node) orderedQCRecvMsgs() {
+	for {
+		msg := new(Echo)
+		err := n.orderedQCClient.RecvMsg(msg)
+		if err != nil {
+			if err != io.EOF {
+				n.setLastErr(err)
+			}
+			return
+		}
+		id := msg.ID
+		n.orderedQCLock.RLock()
+		if c, ok := n.orderedQCRecv[id]; ok {
+			c <- &internalEcho{n.id, msg, nil}
+		}
+		n.orderedQCLock.RUnlock()
+	}
+}
+func (n *Node) orderedSlowServerSendMsgs() {
+	for msg := range n.orderedSlowServerSend {
+		err := n.orderedSlowServerClient.SendMsg(msg)
+		if err != nil {
+			if err != io.EOF {
+				n.setLastErr(err)
+			}
+			return
+		}
+	}
+}
+
+func (n *Node) orderedSlowServerRecvMsgs() {
+	for {
+		msg := new(Echo)
+		err := n.orderedSlowServerClient.RecvMsg(msg)
+		if err != nil {
+			if err != io.EOF {
+				n.setLastErr(err)
+			}
+			return
+		}
+		id := msg.ID
+		n.orderedSlowServerLock.RLock()
+		if c, ok := n.orderedSlowServerRecv[id]; ok {
+			c <- &internalEcho{n.id, msg, nil}
+		}
+		n.orderedSlowServerLock.RUnlock()
+	}
+}
+
+type nodeData struct {
+	orderedQCSend chan *Echo
+	orderedQCRecv map[uint64]chan *internalEcho
+	orderedQCLock *sync.RWMutex
+
+	orderedSlowServerSend chan *Echo
+	orderedSlowServerRecv map[uint64]chan *internalEcho
+	orderedSlowServerLock *sync.RWMutex
+}
+
+// QuorumSpec is the interface of quorum functions for Benchmark.
+type QuorumSpec interface {
+
+	// StartServerBenchmarkQF is the quorum function for the StartServerBenchmark
+	// quorum call method.
+	StartServerBenchmarkQF(replies []*StartResponse) (*StartResponse, bool)
+
+	// StopServerBenchmarkQF is the quorum function for the StopServerBenchmark
+	// quorum call method.
+	StopServerBenchmarkQF(replies []*Result) (*Result, bool)
+
+	// StartBenchmarkQF is the quorum function for the StartBenchmark
+	// quorum call method.
+	StartBenchmarkQF(replies []*StartResponse) (*StartResponse, bool)
+
+	// StopBenchmarkQF is the quorum function for the StopBenchmark
+	// quorum call method.
+	StopBenchmarkQF(replies []*MemoryStat) (*MemoryStatList, bool)
+
+	// UnorderedQCQF is the quorum function for the UnorderedQC
+	// quorum call method.
+	UnorderedQCQF(replies []*Echo) (*Echo, bool)
+
+	// OrderedQCQF is the quorum function for the OrderedQC
+	// strict ordering quorum call method.
+	OrderedQCQF(replies []*Echo) (*Echo, bool)
+
+	// UnorderedSlowServerQF is the quorum function for the UnorderedSlowServer
+	// quorum call method.
+	UnorderedSlowServerQF(replies []*Echo) (*Echo, bool)
+
+	// OrderedSlowServerQF is the quorum function for the OrderedSlowServer
+	// strict ordering quorum call method.
+	OrderedSlowServerQF(replies []*Echo) (*Echo, bool)
+}
+
+type internalEcho struct {
+	nid   uint32
+	reply *Echo
+	err   error
+}
+
+type internalMemoryStat struct {
+	nid   uint32
+	reply *MemoryStat
+	err   error
+}
+
+type internalResult struct {
+	nid   uint32
+	reply *Result
+	err   error
+}
+
+type internalStartResponse struct {
+	nid   uint32
+	reply *StartResponse
+	err   error
 }
 
 // StartServerBenchmark is a quorum call invoked on all nodes in configuration c,
 // with the same argument in, and returns a combined result.
-func (c *Configuration) StartServerBenchmark(ctx context.Context, in *StartRequest) (resp *StartResponse, err error) {
+func (c *Configuration) StartServerBenchmark(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (resp *StartResponse, err error) {
 	var ti traceInfo
 	if c.mgr.opts.trace {
 		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "StartServerBenchmark")
@@ -1277,29 +942,10 @@ func (c *Configuration) StartServerBenchmark(ctx context.Context, in *StartReque
 		}()
 	}
 
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: startServerBenchmarkMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
 	expected := c.n
+	replyChan := make(chan internalStartResponse, expected)
 	for _, n := range c.nodes {
-		n.sendQ <- msg
+		go n.StartServerBenchmark(ctx, in, replyChan)
 	}
 
 	var (
@@ -1310,7 +956,7 @@ func (c *Configuration) StartServerBenchmark(ctx context.Context, in *StartReque
 
 	for {
 		select {
-		case r := <-replies:
+		case r := <-replyChan:
 			if r.err != nil {
 				errs = append(errs, GRPCError{r.nid, r.err})
 				break
@@ -1320,29 +966,35 @@ func (c *Configuration) StartServerBenchmark(ctx context.Context, in *StartReque
 				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
 			}
 
-			reply := new(StartResponse)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.StartServerBenchmarkQF(in, replyValues); quorum {
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.StartServerBenchmarkQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
 			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
 		}
-
 		if len(errs)+len(replyValues) == expected {
 			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
 		}
 	}
 }
 
+func (n *Node) StartServerBenchmark(ctx context.Context, in *StartRequest, replyChan chan<- internalStartResponse) {
+	reply := new(StartResponse)
+	start := time.Now()
+	err := n.conn.Invoke(ctx, "/benchmark.Benchmark/StartServerBenchmark", in, reply)
+	s, ok := status.FromError(err)
+	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
+		n.setLatency(time.Since(start))
+	} else {
+		n.setLastErr(err)
+	}
+	replyChan <- internalStartResponse{n.id, reply, err}
+}
+
 // StopServerBenchmark is a quorum call invoked on all nodes in configuration c,
 // with the same argument in, and returns a combined result.
-func (c *Configuration) StopServerBenchmark(ctx context.Context, in *StopRequest) (resp *Result, err error) {
+func (c *Configuration) StopServerBenchmark(ctx context.Context, in *StopRequest, opts ...grpc.CallOption) (resp *Result, err error) {
 	var ti traceInfo
 	if c.mgr.opts.trace {
 		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "StopServerBenchmark")
@@ -1363,29 +1015,10 @@ func (c *Configuration) StopServerBenchmark(ctx context.Context, in *StopRequest
 		}()
 	}
 
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: stopServerBenchmarkMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
 	expected := c.n
+	replyChan := make(chan internalResult, expected)
 	for _, n := range c.nodes {
-		n.sendQ <- msg
+		go n.StopServerBenchmark(ctx, in, replyChan)
 	}
 
 	var (
@@ -1396,7 +1029,7 @@ func (c *Configuration) StopServerBenchmark(ctx context.Context, in *StopRequest
 
 	for {
 		select {
-		case r := <-replies:
+		case r := <-replyChan:
 			if r.err != nil {
 				errs = append(errs, GRPCError{r.nid, r.err})
 				break
@@ -1406,29 +1039,35 @@ func (c *Configuration) StopServerBenchmark(ctx context.Context, in *StopRequest
 				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
 			}
 
-			reply := new(Result)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.StopServerBenchmarkQF(in, replyValues); quorum {
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.StopServerBenchmarkQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
 			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
 		}
-
 		if len(errs)+len(replyValues) == expected {
 			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
 		}
 	}
 }
 
+func (n *Node) StopServerBenchmark(ctx context.Context, in *StopRequest, replyChan chan<- internalResult) {
+	reply := new(Result)
+	start := time.Now()
+	err := n.conn.Invoke(ctx, "/benchmark.Benchmark/StopServerBenchmark", in, reply)
+	s, ok := status.FromError(err)
+	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
+		n.setLatency(time.Since(start))
+	} else {
+		n.setLastErr(err)
+	}
+	replyChan <- internalResult{n.id, reply, err}
+}
+
 // StartBenchmark is a quorum call invoked on all nodes in configuration c,
 // with the same argument in, and returns a combined result.
-func (c *Configuration) StartBenchmark(ctx context.Context, in *StartRequest) (resp *StartResponse, err error) {
+func (c *Configuration) StartBenchmark(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (resp *StartResponse, err error) {
 	var ti traceInfo
 	if c.mgr.opts.trace {
 		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "StartBenchmark")
@@ -1449,29 +1088,10 @@ func (c *Configuration) StartBenchmark(ctx context.Context, in *StartRequest) (r
 		}()
 	}
 
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: startBenchmarkMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
 	expected := c.n
+	replyChan := make(chan internalStartResponse, expected)
 	for _, n := range c.nodes {
-		n.sendQ <- msg
+		go n.StartBenchmark(ctx, in, replyChan)
 	}
 
 	var (
@@ -1482,7 +1102,7 @@ func (c *Configuration) StartBenchmark(ctx context.Context, in *StartRequest) (r
 
 	for {
 		select {
-		case r := <-replies:
+		case r := <-replyChan:
 			if r.err != nil {
 				errs = append(errs, GRPCError{r.nid, r.err})
 				break
@@ -1492,29 +1112,35 @@ func (c *Configuration) StartBenchmark(ctx context.Context, in *StartRequest) (r
 				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
 			}
 
-			reply := new(StartResponse)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.StartBenchmarkQF(in, replyValues); quorum {
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.StartBenchmarkQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
 			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
 		}
-
 		if len(errs)+len(replyValues) == expected {
 			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
 		}
 	}
 }
 
+func (n *Node) StartBenchmark(ctx context.Context, in *StartRequest, replyChan chan<- internalStartResponse) {
+	reply := new(StartResponse)
+	start := time.Now()
+	err := n.conn.Invoke(ctx, "/benchmark.Benchmark/StartBenchmark", in, reply)
+	s, ok := status.FromError(err)
+	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
+		n.setLatency(time.Since(start))
+	} else {
+		n.setLastErr(err)
+	}
+	replyChan <- internalStartResponse{n.id, reply, err}
+}
+
 // StopBenchmark is a quorum call invoked on all nodes in configuration c,
 // with the same argument in, and returns a combined result.
-func (c *Configuration) StopBenchmark(ctx context.Context, in *StopRequest) (resp *MemoryStatList, err error) {
+func (c *Configuration) StopBenchmark(ctx context.Context, in *StopRequest, opts ...grpc.CallOption) (resp *MemoryStatList, err error) {
 	var ti traceInfo
 	if c.mgr.opts.trace {
 		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "StopBenchmark")
@@ -1535,29 +1161,10 @@ func (c *Configuration) StopBenchmark(ctx context.Context, in *StopRequest) (res
 		}()
 	}
 
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: stopBenchmarkMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
 	expected := c.n
+	replyChan := make(chan internalMemoryStat, expected)
 	for _, n := range c.nodes {
-		n.sendQ <- msg
+		go n.StopBenchmark(ctx, in, replyChan)
 	}
 
 	var (
@@ -1568,439 +1175,7 @@ func (c *Configuration) StopBenchmark(ctx context.Context, in *StopRequest) (res
 
 	for {
 		select {
-		case r := <-replies:
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-
-			if c.mgr.opts.trace {
-				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
-			}
-
-			reply := new(MemoryStat)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.StopBenchmarkQF(in, replyValues); quorum {
-				return resp, nil
-			}
-		case <-ctx.Done():
-			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-		}
-
-		if len(errs)+len(replyValues) == expected {
-			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
-		}
-	}
-}
-
-// OrderedQC is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
-func (c *Configuration) OrderedQC(ctx context.Context, in *Echo) (resp *Echo, err error) {
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "OrderedQC")
-		defer ti.Finish()
-
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: in}, false)
-
-		defer func() {
-			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
-			if err != nil {
-				ti.SetError()
-			}
-		}()
-	}
-
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: orderedQCMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
-	expected := c.n
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	var (
-		replyValues = make([]*Echo, 0, expected)
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replies:
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-
-			if c.mgr.opts.trace {
-				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
-			}
-
-			reply := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.OrderedQCQF(in, replyValues); quorum {
-				return resp, nil
-			}
-		case <-ctx.Done():
-			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-		}
-
-		if len(errs)+len(replyValues) == expected {
-			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
-		}
-	}
-}
-
-// ConcurrentQC is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
-func (c *Configuration) ConcurrentQC(ctx context.Context, in *Echo) (resp *Echo, err error) {
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "ConcurrentQC")
-		defer ti.Finish()
-
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: in}, false)
-
-		defer func() {
-			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
-			if err != nil {
-				ti.SetError()
-			}
-		}()
-	}
-
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: concurrentQCMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
-	expected := c.n
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	var (
-		replyValues = make([]*Echo, 0, expected)
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replies:
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-
-			if c.mgr.opts.trace {
-				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
-			}
-
-			reply := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.ConcurrentQCQF(in, replyValues); quorum {
-				return resp, nil
-			}
-		case <-ctx.Done():
-			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-		}
-
-		if len(errs)+len(replyValues) == expected {
-			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
-		}
-	}
-}
-
-// OrderedAsync asynchronously invokes a quorum call on configuration c
-// and returns a FutureEcho, which can be used to inspect the quorum call
-// reply and error when available.
-func (c *Configuration) OrderedAsync(ctx context.Context, in *Echo) *FutureEcho {
-	fut := &FutureEcho{
-		NodeIDs: make([]uint32, 0, c.n),
-		c:       make(chan struct{}, 1),
-	}
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replyChan := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replyChan)
-
-	expected := c.n
-
-	var msg *ordering.Message
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		// In case of a marshalling error, we should skip sending any messages
-		fut.err = fmt.Errorf("failed to marshal message: %w", err)
-		close(fut.c)
-		return fut
-	}
-	msg = &ordering.Message{
-		ID:       msgID,
-		MethodID: orderedAsyncMethodID,
-		Data:     data,
-	}
-
-	// push the message to the nodes
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	go c.orderedAsyncRecv(ctx, in, msgID, expected, replyChan, fut)
-
-	return fut
-}
-
-func (c *Configuration) orderedAsyncRecv(ctx context.Context, in *Echo, msgID uint64, expected int, replyChan chan *orderingResult, fut *FutureEcho) {
-	defer close(fut.c)
-
-	if fut.err != nil {
-		return
-	}
-
-	defer c.mgr.deleteChan(msgID)
-
-	var (
-		replyValues = make([]*Echo, 0, c.n)
-		reply       *Echo
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
 		case r := <-replyChan:
-			fut.NodeIDs = append(fut.NodeIDs, r.nid)
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-			data := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, data)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, data)
-			if reply, quorum = c.qspec.OrderedAsyncQF(in, replyValues); quorum {
-				fut.Echo, fut.err = reply, nil
-				return
-			}
-		case <-ctx.Done():
-			fut.Echo, fut.err = reply, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-			return
-		}
-		if len(errs)+len(replyValues) == expected {
-			fut.Echo, fut.err = reply, QuorumCallError{"incomplete call", len(replyValues), errs}
-			return
-		}
-	}
-}
-
-// ConcurrentAsync asynchronously invokes a quorum call on configuration c
-// and returns a FutureEcho, which can be used to inspect the quorum call
-// reply and error when available.
-func (c *Configuration) ConcurrentAsync(ctx context.Context, in *Echo) *FutureEcho {
-	fut := &FutureEcho{
-		NodeIDs: make([]uint32, 0, c.n),
-		c:       make(chan struct{}, 1),
-	}
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replyChan := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replyChan)
-
-	expected := c.n
-
-	var msg *ordering.Message
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		// In case of a marshalling error, we should skip sending any messages
-		fut.err = fmt.Errorf("failed to marshal message: %w", err)
-		close(fut.c)
-		return fut
-	}
-	msg = &ordering.Message{
-		ID:       msgID,
-		MethodID: concurrentAsyncMethodID,
-		Data:     data,
-	}
-
-	// push the message to the nodes
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	go c.concurrentAsyncRecv(ctx, in, msgID, expected, replyChan, fut)
-
-	return fut
-}
-
-func (c *Configuration) concurrentAsyncRecv(ctx context.Context, in *Echo, msgID uint64, expected int, replyChan chan *orderingResult, fut *FutureEcho) {
-	defer close(fut.c)
-
-	if fut.err != nil {
-		return
-	}
-
-	defer c.mgr.deleteChan(msgID)
-
-	var (
-		replyValues = make([]*Echo, 0, c.n)
-		reply       *Echo
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replyChan:
-			fut.NodeIDs = append(fut.NodeIDs, r.nid)
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-			data := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, data)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, data)
-			if reply, quorum = c.qspec.ConcurrentAsyncQF(in, replyValues); quorum {
-				fut.Echo, fut.err = reply, nil
-				return
-			}
-		case <-ctx.Done():
-			fut.Echo, fut.err = reply, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-			return
-		}
-		if len(errs)+len(replyValues) == expected {
-			fut.Echo, fut.err = reply, QuorumCallError{"incomplete call", len(replyValues), errs}
-			return
-		}
-	}
-}
-
-// OrderedSlowServer is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
-func (c *Configuration) OrderedSlowServer(ctx context.Context, in *Echo) (resp *Echo, err error) {
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "OrderedSlowServer")
-		defer ti.Finish()
-
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: in}, false)
-
-		defer func() {
-			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
-			if err != nil {
-				ti.SetError()
-			}
-		}()
-	}
-
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: orderedSlowServerMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
-	expected := c.n
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	var (
-		replyValues = make([]*Echo, 0, expected)
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replies:
 			if r.err != nil {
 				errs = append(errs, GRPCError{r.nid, r.err})
 				break
@@ -2010,205 +1185,30 @@ func (c *Configuration) OrderedSlowServer(ctx context.Context, in *Echo) (resp *
 				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
 			}
 
-			reply := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.OrderedSlowServerQF(in, replyValues); quorum {
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.StopBenchmarkQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
 			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
 		}
-
 		if len(errs)+len(replyValues) == expected {
 			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
 		}
 	}
 }
 
-// ConcurrentSlowServer is a quorum call invoked on all nodes in configuration c,
-// with the same argument in, and returns a combined result.
-func (c *Configuration) ConcurrentSlowServer(ctx context.Context, in *Echo) (resp *Echo, err error) {
-	var ti traceInfo
-	if c.mgr.opts.trace {
-		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "ConcurrentSlowServer")
-		defer ti.Finish()
-
-		ti.firstLine.cid = c.id
-		if deadline, ok := ctx.Deadline(); ok {
-			ti.firstLine.deadline = time.Until(deadline)
-		}
-		ti.LazyLog(&ti.firstLine, false)
-		ti.LazyLog(&payload{sent: true, msg: in}, false)
-
-		defer func() {
-			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
-			if err != nil {
-				ti.SetError()
-			}
-		}()
+func (n *Node) StopBenchmark(ctx context.Context, in *StopRequest, replyChan chan<- internalMemoryStat) {
+	reply := new(MemoryStat)
+	start := time.Now()
+	err := n.conn.Invoke(ctx, "/benchmark.Benchmark/StopBenchmark", in, reply)
+	s, ok := status.FromError(err)
+	if ok && (s.Code() == codes.OK || s.Code() == codes.Canceled) {
+		n.setLatency(time.Since(start))
+	} else {
+		n.setLastErr(err)
 	}
-
-	// get the ID which will be used to return the correct responses for a request
-	msgID := c.mgr.nextMsgID()
-
-	// set up a channel to collect replies
-	replies := make(chan *orderingResult, c.n)
-	c.mgr.putChan(msgID, replies)
-
-	// remove the replies channel when we are done
-	defer c.mgr.deleteChan(msgID)
-
-	data, err := marshaler.Marshal(in)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal message: %w", err)
-	}
-	msg := &ordering.Message{
-		ID:       msgID,
-		MethodID: concurrentSlowServerMethodID,
-		Data:     data,
-	}
-	// push the message to the nodes
-	expected := c.n
-	for _, n := range c.nodes {
-		n.sendQ <- msg
-	}
-
-	var (
-		replyValues = make([]*Echo, 0, expected)
-		errs        []GRPCError
-		quorum      bool
-	)
-
-	for {
-		select {
-		case r := <-replies:
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
-			}
-
-			if c.mgr.opts.trace {
-				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
-			}
-
-			reply := new(Echo)
-			err := unmarshaler.Unmarshal(r.reply, reply)
-			if err != nil {
-				errs = append(errs, GRPCError{r.nid, fmt.Errorf("failed to unmarshal reply: %w", err)})
-				break
-			}
-			replyValues = append(replyValues, reply)
-			if resp, quorum = c.qspec.ConcurrentSlowServerQF(in, replyValues); quorum {
-				return resp, nil
-			}
-		case <-ctx.Done():
-			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
-		}
-
-		if len(errs)+len(replyValues) == expected {
-			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
-		}
-	}
-}
-
-// QuorumSpec is the interface of quorum functions for Benchmark.
-type QuorumSpec interface {
-
-	// StartServerBenchmarkQF is the quorum function for the StartServerBenchmark
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the StartServerBenchmark method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *StartRequest'.
-	StartServerBenchmarkQF(in *StartRequest, replies []*StartResponse) (*StartResponse, bool)
-
-	// StopServerBenchmarkQF is the quorum function for the StopServerBenchmark
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the StopServerBenchmark method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *StopRequest'.
-	StopServerBenchmarkQF(in *StopRequest, replies []*Result) (*Result, bool)
-
-	// StartBenchmarkQF is the quorum function for the StartBenchmark
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the StartBenchmark method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *StartRequest'.
-	StartBenchmarkQF(in *StartRequest, replies []*StartResponse) (*StartResponse, bool)
-
-	// StopBenchmarkQF is the quorum function for the StopBenchmark
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the StopBenchmark method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *StopRequest'.
-	StopBenchmarkQF(in *StopRequest, replies []*MemoryStat) (*MemoryStatList, bool)
-
-	// UnorderedQCQF is the quorum function for the UnorderedQC
-	// quorum call method. The in parameter is the request object
-	// supplied to the UnorderedQC method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	UnorderedQCQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// OrderedQCQF is the quorum function for the OrderedQC
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the OrderedQC method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	OrderedQCQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// ConcurrentQCQF is the quorum function for the ConcurrentQC
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the ConcurrentQC method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	ConcurrentQCQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// UnorderedAsyncQF is the quorum function for the UnorderedAsync
-	// asynchronous quorum call method. The in parameter is the request object
-	// supplied to the UnorderedAsync method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	UnorderedAsyncQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// OrderedAsyncQF is the quorum function for the OrderedAsync
-	// asynchronous ordered quorum call method. The in parameter is the request object
-	// supplied to the OrderedAsync method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	OrderedAsyncQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// ConcurrentAsyncQF is the quorum function for the ConcurrentAsync
-	// asynchronous ordered quorum call method. The in parameter is the request object
-	// supplied to the ConcurrentAsync method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	ConcurrentAsyncQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// UnorderedSlowServerQF is the quorum function for the UnorderedSlowServer
-	// quorum call method. The in parameter is the request object
-	// supplied to the UnorderedSlowServer method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	UnorderedSlowServerQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// OrderedSlowServerQF is the quorum function for the OrderedSlowServer
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the OrderedSlowServer method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	OrderedSlowServerQF(in *Echo, replies []*Echo) (*Echo, bool)
-
-	// ConcurrentSlowServerQF is the quorum function for the ConcurrentSlowServer
-	// ordered quorum call method. The in parameter is the request object
-	// supplied to the ConcurrentSlowServer method at call time, and may or may not
-	// be used by the quorum function. If the in parameter is not needed
-	// you should implement your quorum function with '_ *Echo'.
-	ConcurrentSlowServerQF(in *Echo, replies []*Echo) (*Echo, bool)
+	replyChan <- internalMemoryStat{n.id, reply, err}
 }
 
 // benchmarks
@@ -2258,7 +1258,7 @@ func (c *Configuration) UnorderedQC(ctx context.Context, in *Echo, opts ...grpc.
 			}
 
 			replyValues = append(replyValues, r.reply)
-			if resp, quorum = c.qspec.UnorderedQCQF(in, replyValues); quorum {
+			if resp, quorum = c.qspec.UnorderedQCQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
@@ -2281,6 +1281,111 @@ func (n *Node) UnorderedQC(ctx context.Context, in *Echo, replyChan chan<- inter
 		n.setLastErr(err)
 	}
 	replyChan <- internalEcho{n.id, reply, err}
+}
+
+// OrderedQC is a quorum call invoked on all nodes in configuration c,
+// with the same argument in, and returns a combined result.
+func (c *Configuration) OrderedQC(ctx context.Context, in *Echo, opts ...grpc.CallOption) (resp *Echo, err error) {
+	var ti traceInfo
+	if c.mgr.opts.trace {
+		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "OrderedQC")
+		defer ti.Finish()
+
+		ti.firstLine.cid = c.id
+		if deadline, ok := ctx.Deadline(); ok {
+			ti.firstLine.deadline = time.Until(deadline)
+		}
+		ti.LazyLog(&ti.firstLine, false)
+		ti.LazyLog(&payload{sent: true, msg: in}, false)
+
+		defer func() {
+			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
+			if err != nil {
+				ti.SetError()
+			}
+		}()
+	}
+
+	// get the ID which will be used to return the correct responses for a request
+	msgID := atomic.AddUint64(&c.mgr.orderedQCID, 1)
+	in.ID = msgID
+
+	// set up a channel to collect replies
+	replies := make(chan *internalEcho, c.n)
+	c.mgr.orderedQCLock.Lock()
+	c.mgr.orderedQCRecv[msgID] = replies
+	c.mgr.orderedQCLock.Unlock()
+
+	defer func() {
+		// remove the replies channel when we are done
+		c.mgr.orderedQCLock.Lock()
+		delete(c.mgr.orderedQCRecv, msgID)
+		c.mgr.orderedQCLock.Unlock()
+	}()
+
+	// push the message to the nodes
+	expected := c.n
+	for _, n := range c.nodes {
+		n.orderedQCSend <- in
+	}
+
+	var (
+		replyValues = make([]*Echo, 0, expected)
+		errs        []GRPCError
+		quorum      bool
+	)
+
+	for {
+		select {
+		case r := <-replies:
+			// TODO: An error from SendMsg/RecvMsg means that the stream has closed, so we probably don't need to check
+			// for errors here.
+			if r.err != nil {
+				errs = append(errs, GRPCError{r.nid, r.err})
+				break
+			}
+
+			if c.mgr.opts.trace {
+				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
+			}
+
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.OrderedQCQF(replyValues); quorum {
+				return resp, nil
+			}
+		case <-ctx.Done():
+			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
+		}
+
+		if len(errs)+len(replyValues) == expected {
+			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
+		}
+	}
+}
+
+// OrderedQCServerLoop is a helper function that will receive messages on srv,
+// generate a response message using getResponse, and send the response back on
+// srv. The function returns when the stream ends, and returns the error that
+// caused it to end.
+func OrderedQCServerLoop(srv Benchmark_OrderedQCServer, getResponse func(*Echo) *Echo) error {
+	ctx := srv.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		req, err := srv.Recv()
+		if err != nil {
+			return err
+		}
+		resp := getResponse(req)
+		resp.ID = req.ID
+		err = srv.Send(resp)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // UnorderedSlowServer is a quorum call invoked on all nodes in configuration c,
@@ -2331,7 +1436,7 @@ func (c *Configuration) UnorderedSlowServer(ctx context.Context, in *Echo, opts 
 			}
 
 			replyValues = append(replyValues, r.reply)
-			if resp, quorum = c.qspec.UnorderedSlowServerQF(in, replyValues); quorum {
+			if resp, quorum = c.qspec.UnorderedSlowServerQF(replyValues); quorum {
 				return resp, nil
 			}
 		case <-ctx.Done():
@@ -2356,260 +1461,107 @@ func (n *Node) UnorderedSlowServer(ctx context.Context, in *Echo, replyChan chan
 	replyChan <- internalEcho{n.id, reply, err}
 }
 
-const hasOrderingMethods = true
+// OrderedSlowServer is a quorum call invoked on all nodes in configuration c,
+// with the same argument in, and returns a combined result.
+func (c *Configuration) OrderedSlowServer(ctx context.Context, in *Echo, opts ...grpc.CallOption) (resp *Echo, err error) {
+	var ti traceInfo
+	if c.mgr.opts.trace {
+		ti.Trace = trace.New("gorums."+c.tstring()+".Sent", "OrderedSlowServer")
+		defer ti.Finish()
 
-const startServerBenchmarkMethodID int32 = 0
-const stopServerBenchmarkMethodID int32 = 1
-const startBenchmarkMethodID int32 = 2
-const stopBenchmarkMethodID int32 = 3
-const orderedQCMethodID int32 = 4
-const concurrentQCMethodID int32 = 5
-const orderedAsyncMethodID int32 = 6
-const concurrentAsyncMethodID int32 = 7
-const orderedSlowServerMethodID int32 = 8
-const concurrentSlowServerMethodID int32 = 9
-const multicastMethodID int32 = 10
-const concurrentMulticastMethodID int32 = 11
+		ti.firstLine.cid = c.id
+		if deadline, ok := ctx.Deadline(); ok {
+			ti.firstLine.deadline = time.Until(deadline)
+		}
+		ti.LazyLog(&ti.firstLine, false)
+		ti.LazyLog(&payload{sent: true, msg: in}, false)
 
-var orderingMethods = map[int32]methodInfo{
+		defer func() {
+			ti.LazyLog(&qcresult{reply: resp, err: err}, false)
+			if err != nil {
+				ti.SetError()
+			}
+		}()
+	}
 
-	0:  {oneway: false, concurrent: false},
-	1:  {oneway: false, concurrent: false},
-	2:  {oneway: false, concurrent: false},
-	3:  {oneway: false, concurrent: false},
-	4:  {oneway: false, concurrent: false},
-	5:  {oneway: false, concurrent: true},
-	6:  {oneway: false, concurrent: false},
-	7:  {oneway: false, concurrent: true},
-	8:  {oneway: false, concurrent: false},
-	9:  {oneway: false, concurrent: true},
-	10: {oneway: true, concurrent: false},
-	11: {oneway: true, concurrent: true},
-}
+	// get the ID which will be used to return the correct responses for a request
+	msgID := atomic.AddUint64(&c.mgr.orderedSlowServerID, 1)
+	in.ID = msgID
 
-type internalEcho struct {
-	nid   uint32
-	reply *Echo
-	err   error
-}
+	// set up a channel to collect replies
+	replies := make(chan *internalEcho, c.n)
+	c.mgr.orderedSlowServerLock.Lock()
+	c.mgr.orderedSlowServerRecv[msgID] = replies
+	c.mgr.orderedSlowServerLock.Unlock()
 
-type internalMemoryStat struct {
-	nid   uint32
-	reply *MemoryStat
-	err   error
-}
+	defer func() {
+		// remove the replies channel when we are done
+		c.mgr.orderedSlowServerLock.Lock()
+		delete(c.mgr.orderedSlowServerRecv, msgID)
+		c.mgr.orderedSlowServerLock.Unlock()
+	}()
 
-type internalResult struct {
-	nid   uint32
-	reply *Result
-	err   error
-}
+	// push the message to the nodes
+	expected := c.n
+	for _, n := range c.nodes {
+		n.orderedSlowServerSend <- in
+	}
 
-type internalStartResponse struct {
-	nid   uint32
-	reply *StartResponse
-	err   error
-}
+	var (
+		replyValues = make([]*Echo, 0, expected)
+		errs        []GRPCError
+		quorum      bool
+	)
 
-// FutureEcho is a future object for processing replies.
-type FutureEcho struct {
-	// the actual reply
-	*Echo
-	NodeIDs []uint32
-	err     error
-	c       chan struct{}
-}
+	for {
+		select {
+		case r := <-replies:
+			// TODO: An error from SendMsg/RecvMsg means that the stream has closed, so we probably don't need to check
+			// for errors here.
+			if r.err != nil {
+				errs = append(errs, GRPCError{r.nid, r.err})
+				break
+			}
 
-// Get returns the reply and any error associated with the called method.
-// The method blocks until a reply or error is available.
-func (f *FutureEcho) Get() (*Echo, error) {
-	<-f.c
-	return f.Echo, f.err
-}
+			if c.mgr.opts.trace {
+				ti.LazyLog(&payload{sent: false, id: r.nid, msg: r.reply}, false)
+			}
 
-// Done reports if a reply and/or error is available for the called method.
-func (f *FutureEcho) Done() bool {
-	select {
-	case <-f.c:
-		return true
-	default:
-		return false
+			replyValues = append(replyValues, r.reply)
+			if resp, quorum = c.qspec.OrderedSlowServerQF(replyValues); quorum {
+				return resp, nil
+			}
+		case <-ctx.Done():
+			return resp, QuorumCallError{ctx.Err().Error(), len(replyValues), errs}
+		}
+
+		if len(errs)+len(replyValues) == expected {
+			return resp, QuorumCallError{"incomplete call", len(replyValues), errs}
+		}
 	}
 }
 
-// Benchmark is the server-side API for the Benchmark Service
-type Benchmark interface {
-	StartServerBenchmark(*StartRequest) *StartResponse
-	StopServerBenchmark(*StopRequest) *Result
-	StartBenchmark(*StartRequest) *StartResponse
-	StopBenchmark(*StopRequest) *MemoryStat
-	OrderedQC(*Echo) *Echo
-	ConcurrentQC(*Echo) *Echo
-	OrderedAsync(*Echo) *Echo
-	ConcurrentAsync(*Echo) *Echo
-	OrderedSlowServer(*Echo) *Echo
-	ConcurrentSlowServer(*Echo) *Echo
-	Multicast(*TimedMsg)
-	ConcurrentMulticast(*TimedMsg)
-}
-
-func (s *GorumsServer) RegisterBenchmarkServer(srv Benchmark) {
-	s.srv.handlers[startServerBenchmarkMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(StartRequest)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: startServerBenchmarkMethodID, ID: in.ID}
+// OrderedSlowServerServerLoop is a helper function that will receive messages on srv,
+// generate a response message using getResponse, and send the response back on
+// srv. The function returns when the stream ends, and returns the error that
+// caused it to end.
+func OrderedSlowServerServerLoop(srv Benchmark_OrderedSlowServerServer, getResponse func(*Echo) *Echo) error {
+	ctx := srv.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		resp := srv.StartServerBenchmark(req)
-		data, err := marshaler.Marshal(resp)
+		req, err := srv.Recv()
 		if err != nil {
-			return new(ordering.Message)
+			return err
 		}
-		return &ordering.Message{Data: data, MethodID: startServerBenchmarkMethodID, ID: in.ID}
-	}
-	s.srv.handlers[stopServerBenchmarkMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(StopRequest)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
+		resp := getResponse(req)
+		resp.ID = req.ID
+		err = srv.Send(resp)
 		if err != nil {
-			return &ordering.Message{MethodID: stopServerBenchmarkMethodID, ID: in.ID}
+			return err
 		}
-		resp := srv.StopServerBenchmark(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: stopServerBenchmarkMethodID, ID: in.ID}
-	}
-	s.srv.handlers[startBenchmarkMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(StartRequest)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: startBenchmarkMethodID, ID: in.ID}
-		}
-		resp := srv.StartBenchmark(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: startBenchmarkMethodID, ID: in.ID}
-	}
-	s.srv.handlers[stopBenchmarkMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(StopRequest)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: stopBenchmarkMethodID, ID: in.ID}
-		}
-		resp := srv.StopBenchmark(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: stopBenchmarkMethodID, ID: in.ID}
-	}
-	s.srv.handlers[orderedQCMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: orderedQCMethodID, ID: in.ID}
-		}
-		resp := srv.OrderedQC(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: orderedQCMethodID, ID: in.ID}
-	}
-	s.srv.handlers[concurrentQCMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: concurrentQCMethodID, ID: in.ID}
-		}
-		resp := srv.ConcurrentQC(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: concurrentQCMethodID, ID: in.ID}
-	}
-	s.srv.handlers[orderedAsyncMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: orderedAsyncMethodID, ID: in.ID}
-		}
-		resp := srv.OrderedAsync(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: orderedAsyncMethodID, ID: in.ID}
-	}
-	s.srv.handlers[concurrentAsyncMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: concurrentAsyncMethodID, ID: in.ID}
-		}
-		resp := srv.ConcurrentAsync(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: concurrentAsyncMethodID, ID: in.ID}
-	}
-	s.srv.handlers[orderedSlowServerMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: orderedSlowServerMethodID, ID: in.ID}
-		}
-		resp := srv.OrderedSlowServer(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: orderedSlowServerMethodID, ID: in.ID}
-	}
-	s.srv.handlers[concurrentSlowServerMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(Echo)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		// TODO: how to handle marshaling errors here
-		if err != nil {
-			return &ordering.Message{MethodID: concurrentSlowServerMethodID, ID: in.ID}
-		}
-		resp := srv.ConcurrentSlowServer(req)
-		data, err := marshaler.Marshal(resp)
-		if err != nil {
-			return new(ordering.Message)
-		}
-		return &ordering.Message{Data: data, MethodID: concurrentSlowServerMethodID, ID: in.ID}
-	}
-	s.srv.handlers[multicastMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(TimedMsg)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		if err != nil {
-			return nil
-		}
-		srv.Multicast(req)
-		return nil
-	}
-	s.srv.handlers[concurrentMulticastMethodID] = func(in *ordering.Message) *ordering.Message {
-		req := new(TimedMsg)
-		err := unmarshaler.Unmarshal(in.GetData(), req)
-		if err != nil {
-			return nil
-		}
-		srv.ConcurrentMulticast(req)
-		return nil
 	}
 }

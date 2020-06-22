@@ -91,8 +91,6 @@ func main() {
 		serverStats    = flag.Bool("server-stats", false, "Show server statistics separately")
 		cfgSize        = flag.Int("config-size", 4, "Size of the configuration to use. If < 1, all nodes will be used.")
 		qSize          = flag.Int("quorum-size", 0, "Number of replies to wait for before completing a quorum call.")
-		sendBuffer     = flag.Uint("send-buffer", 0, "The size of the send buffer.")
-		serverBuffer   = flag.Uint("server-buffer", 0, "The size of the server buffers.")
 		list           = flag.Bool("list", false, "List all available benchmarks")
 	)
 	flag.Var(&benchmarksFlag, "benchmarks", "A `regexp` matching the benchmarks to run.")
@@ -166,7 +164,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Failed to listen on '%s': %v\n", *server, err)
 			os.Exit(1)
 		}
-		srv := benchmark.NewServer(benchmark.WithServerBufferSize(*serverBuffer))
+		srv := benchmark.NewServer()
 		go srv.Serve(lis)
 
 		fmt.Printf("Running benchmark server on '%s'\n", *server)
@@ -181,13 +179,12 @@ func main() {
 		remote = false
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		remotes = benchmark.StartLocalServers(ctx, *cfgSize, benchmark.WithServerBufferSize(*serverBuffer))
+		remotes = benchmark.StartLocalServers(ctx, *cfgSize)
 	}
 
 	var mgrOpts = []benchmark.ManagerOption{
 		benchmark.WithGrpcDialOptions(grpc.WithBlock(), grpc.WithInsecure()),
 		benchmark.WithDialTimeout(10 * time.Second),
-		benchmark.WithSendBufferSize(*sendBuffer),
 	}
 
 	if trace.IsEnabled() {

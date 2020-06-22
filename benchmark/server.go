@@ -7,164 +7,86 @@ import (
 	net "net"
 	"time"
 
-	empty "github.com/golang/protobuf/ptypes/empty"
+	"google.golang.org/grpc"
 )
 
-type unorderedServer struct {
+type server struct {
 	stats *Stats
 }
 
-func (srv *unorderedServer) StartServerBenchmark(_ context.Context, _ *StartRequest) (_ *StartResponse, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) StopServerBenchmark(_ context.Context, _ *StopRequest) (_ *Result, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) StartBenchmark(_ context.Context, _ *StartRequest) (_ *StartResponse, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) StopBenchmark(_ context.Context, _ *StopRequest) (_ *MemoryStat, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) UnorderedQC(_ context.Context, in *Echo) (out *Echo, _ error) {
-	out = in
-	return
-}
-
-func (srv *unorderedServer) OrderedQC(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) ConcurrentQC(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) UnorderedAsync(_ context.Context, in *Echo) (out *Echo, _ error) {
-	out = in
-	return
-}
-
-func (srv *unorderedServer) OrderedAsync(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) ConcurrentAsync(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) UnorderedSlowServer(_ context.Context, in *Echo) (out *Echo, _ error) {
-	time.Sleep(10 * time.Millisecond)
-	out = in
-	return
-}
-
-func (srv *unorderedServer) OrderedSlowServer(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) ConcurrentSlowServer(_ context.Context, _ *Echo) (_ *Echo, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) Multicast(_ context.Context, _ *TimedMsg) (_ *empty.Empty, _ error) {
-	panic("Not implemented")
-}
-
-func (srv *unorderedServer) ConcurrentMulticast(_ context.Context, _ *TimedMsg) (_ *empty.Empty, _ error) {
-	panic("Not implemented")
-}
-
-type orderedServer struct {
-	stats *Stats
-}
-
-func (srv *orderedServer) OrderedQC(in *Echo) *Echo {
-	return in
-}
-
-func (srv *orderedServer) ConcurrentQC(in *Echo) *Echo {
-	return in
-}
-
-func (srv *orderedServer) OrderedAsync(in *Echo) *Echo {
-	return in
-}
-
-func (srv *orderedServer) ConcurrentAsync(in *Echo) *Echo {
-	return in
-}
-
-func (srv *orderedServer) OrderedSlowServer(in *Echo) *Echo {
-	time.Sleep(10 * time.Millisecond)
-	return in
-}
-
-func (srv *orderedServer) ConcurrentSlowServer(in *Echo) *Echo {
-	time.Sleep(10 * time.Millisecond)
-	return in
-}
-
-func (srv *orderedServer) Multicast(msg *TimedMsg) {
-	latency := time.Now().UnixNano() - msg.SendTime
-	srv.stats.AddLatency(time.Duration(latency))
-}
-
-func (srv *orderedServer) ConcurrentMulticast(msg *TimedMsg) {
-	latency := time.Now().UnixNano() - msg.SendTime
-	srv.stats.AddLatency(time.Duration(latency))
-}
-
-func (srv *orderedServer) StartServerBenchmark(_ *StartRequest) *StartResponse {
+func (srv *server) StartServerBenchmark(_ context.Context, req *StartRequest) (resp *StartResponse, _ error) {
 	srv.stats.Clear()
 	srv.stats.Start()
-	return &StartResponse{}
+	resp = &StartResponse{}
+	return
 }
 
-func (srv *orderedServer) StopServerBenchmark(_ *StopRequest) *Result {
+func (srv *server) StopServerBenchmark(_ context.Context, req *StopRequest) (resp *Result, _ error) {
 	srv.stats.End()
-	return srv.stats.GetResult()
+	resp = srv.stats.GetResult()
+	return
 }
 
-func (srv *orderedServer) StartBenchmark(_ *StartRequest) *StartResponse {
+func (srv *server) StartBenchmark(_ context.Context, req *StartRequest) (resp *StartResponse, _ error) {
 	srv.stats.Clear()
 	srv.stats.Start()
-	return &StartResponse{}
+	resp = &StartResponse{}
+	return
 }
 
-func (srv *orderedServer) StopBenchmark(_ *StopRequest) *MemoryStat {
+func (srv *server) StopBenchmark(_ context.Context, req *StopRequest) (resp *MemoryStat, _ error) {
 	srv.stats.End()
-	return &MemoryStat{
+	resp = &MemoryStat{
 		Allocs: srv.stats.endMs.Mallocs - srv.stats.startMs.Mallocs,
 		Memory: srv.stats.endMs.TotalAlloc - srv.stats.startMs.TotalAlloc,
 	}
+	return
+}
+
+func (srv *server) UnorderedQC(_ context.Context, in *Echo) (out *Echo, _ error) {
+	out = in
+	return
+}
+
+func (srv *server) OrderedQC(stream Benchmark_OrderedQCServer) (err error) {
+	return OrderedQCServerLoop(stream, func(in *Echo) (out *Echo) {
+		out = in
+		return
+	})
+}
+
+func (srv *server) UnorderedSlowServer(_ context.Context, in *Echo) (out *Echo, _ error) {
+	time.Sleep(10 * time.Millisecond)
+	out = in
+	return
+}
+
+func (srv *server) OrderedSlowServer(stream Benchmark_OrderedSlowServerServer) (err error) {
+	return OrderedSlowServerServerLoop(stream, func(in *Echo) (out *Echo) {
+		time.Sleep(10 * time.Millisecond)
+		out = in
+		return
+	})
 }
 
 // Server is a unified server for both ordered and unordered methods
 type Server struct {
-	*GorumsServer
-	orderedSrv   orderedServer
-	unorderedSrv unorderedServer
-	stats        Stats
+	*grpc.Server
+	impl  server
+	stats Stats
 }
 
 // NewServer returns a new Server
-func NewServer(opts ...ServerOption) *Server {
-	srv := &Server{}
-	srv.orderedSrv.stats = &srv.stats
-	srv.unorderedSrv.stats = &srv.stats
+func NewServer() *Server {
+	srv := &Server{Server: grpc.NewServer()}
+	srv.impl.stats = &srv.stats
 
-	srv.GorumsServer = NewGorumsServer(opts...)
-	srv.GorumsServer.RegisterBenchmarkServer(&srv.orderedSrv)
-	RegisterBenchmarkServer(srv.GorumsServer.grpcServer, &srv.unorderedSrv)
+	RegisterBenchmarkServer(srv.Server, &srv.impl)
 	return srv
 }
 
 // StartLocalServers starts benchmark servers locally
-func StartLocalServers(ctx context.Context, n int, opts ...ServerOption) []string {
+func StartLocalServers(ctx context.Context, n int) []string {
 	var ports []string
 	basePort := 40000
 	var servers []*Server
@@ -175,7 +97,7 @@ func StartLocalServers(ctx context.Context, n int, opts ...ServerOption) []strin
 		if err != nil {
 			log.Fatalf("Failed to start local server: %v\n", err)
 		}
-		srv := NewServer(opts...)
+		srv := NewServer()
 		servers = append(servers, srv)
 		go srv.Serve(lis)
 	}

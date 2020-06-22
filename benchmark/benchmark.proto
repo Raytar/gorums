@@ -4,15 +4,19 @@ package benchmark;
 
 option go_package = "github.com/relab/gorums/benchmark";
 
-import "google/protobuf/empty.proto";
-
 import "gorums.proto";
 
-message Echo { bytes payload = 1; }
+message Empty {}
+
+message Echo {
+  bytes payload = 1;
+  uint64 ID = 2;
+}
 
 message TimedMsg {
   int64 SendTime = 1;
   bytes payload = 2;
+  uint64 ID = 3;
 }
 
 message StartRequest {}
@@ -42,79 +46,32 @@ message MemoryStatList { repeated MemoryStat MemoryStats = 1; }
 
 service Benchmark {
   rpc StartServerBenchmark(StartRequest) returns (StartResponse) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
+    option (gorums.qc) = true;
   }
 
   rpc StopServerBenchmark(StopRequest) returns (Result) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
+    option (gorums.qc) = true;
   }
 
   rpc StartBenchmark(StartRequest) returns (StartResponse) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
+    option (gorums.qc) = true;
   }
 
   rpc StopBenchmark(StopRequest) returns (MemoryStat) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
+    option (gorums.qc) = true;
     option (gorums.custom_return_type) = "MemoryStatList";
   }
 
   // benchmarks
-  rpc UnorderedQC(Echo) returns (Echo) { option (gorums.quorumcall) = true; }
+  rpc UnorderedQC(Echo) returns (Echo) { option (gorums.qc) = true; }
 
-  rpc OrderedQC(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
+  rpc OrderedQC(stream Echo) returns (stream Echo) {
+    option (gorums.qc_strict_ordering) = "ID";
   }
 
-  rpc ConcurrentQC(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
-    option (gorums.concurrent) = true;
-  }
+  rpc UnorderedSlowServer(Echo) returns (Echo) { option (gorums.qc) = true; }
 
-  rpc UnorderedAsync(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.async) = true;
-  }
-
-  rpc OrderedAsync(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
-    option (gorums.async) = true;
-  }
-
-  rpc ConcurrentAsync(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
-    option (gorums.async) = true;
-    option (gorums.concurrent) = true;
-  }
-
-  rpc UnorderedSlowServer(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-  }
-
-  rpc OrderedSlowServer(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
-  }
-
-  rpc ConcurrentSlowServer(Echo) returns (Echo) {
-    option (gorums.quorumcall) = true;
-    option (gorums.ordered) = true;
-    option (gorums.concurrent) = true;
-  }
-
-  rpc Multicast(TimedMsg) returns (google.protobuf.Empty) {
-    option (gorums.multicast) = true;
-  }
-
-  rpc ConcurrentMulticast(TimedMsg) returns (google.protobuf.Empty) {
-    option (gorums.multicast) = true;
-    option (gorums.concurrent) = true;
+  rpc OrderedSlowServer(stream Echo) returns (stream Echo) {
+    option (gorums.qc_strict_ordering) = "ID";
   }
 }
