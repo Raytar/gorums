@@ -44,6 +44,7 @@ func main() {
 			gengorums.SetTrace(*trace)
 			fmt.Fprintf(os.Stderr, "Generating code with tracing enabled\n")
 		}
+		fmt.Fprintln(os.Stderr)
 		for _, f := range gen.Files {
 			if f.Generate {
 				gengorums.GenerateNodeStreamProto(gen, f)

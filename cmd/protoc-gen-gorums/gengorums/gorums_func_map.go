@@ -114,6 +114,7 @@ var funcMap = template.FuncMap{
 	"isConcurrent": func(method *protogen.Method) bool {
 		return hasMethodOption(method, gorums.E_Concurrent)
 	},
+	"inc":                   func(i int) int { return i + 1 },
 	"out":                   out,
 	"outType":               outType,
 	"internalOut":           internalOut,
@@ -131,7 +132,8 @@ var funcMap = template.FuncMap{
 	"field":                 field,
 	"hasOrderingMethods":    hasOrderingMethods,
 	"exclusivelyOrdering":   exclusivelyOrdering,
-	"allTypes":              allTypes,
+	"fileMessages":          fileMessages,
+	"fileImports":           fileImports,
 }
 
 type mapFunc func(*protogen.GeneratedFile, *protogen.Method, map[string]string)
@@ -241,19 +243,4 @@ func exclusivelyOrdering(service *protogen.Service) bool {
 		}
 	}
 	return true
-}
-
-func allTypes(services []*protogen.Service) []*protogen.Message {
-	msgs := make(map[*protogen.Message]struct{})
-	for _, s := range services {
-		for _, m := range s.Methods {
-			msgs[m.Input] = struct{}{}
-			msgs[m.Output] = struct{}{}
-		}
-	}
-	var unique []*protogen.Message
-	for m := range msgs {
-		unique = append(unique, m)
-	}
-	return unique
 }

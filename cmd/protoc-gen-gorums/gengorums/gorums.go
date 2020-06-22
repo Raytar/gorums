@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/relab/gorums"
 	"github.com/relab/gorums/internal/correctable"
@@ -23,29 +24,54 @@ func GenerateNodeStreamProto(gen *protogen.Plugin, file *protogen.File) {
 	if !gorumsGuard(file) {
 		return
 	}
-	filename := file.GeneratedFilenamePrefix + "_nodestream_gorums.pb.go"
-	g := gen.NewGeneratedFile(filename, file.GoImportPath)
+
+	goFile := gen.NewGeneratedFile(file.GeneratedFilenamePrefix+"_def_gorums.pb.go", file.GoImportPath)
+	grpcFile := gen.NewGeneratedFile(file.GeneratedFilenamePrefix+"_grpc_gorums.pb.go", file.GoImportPath)
+
 	tmpDir, err := ioutil.TempDir("", "gorums")
 	if err != nil {
 		log.Fatalf("Failed to create temporary directory: %v\n", err)
 	}
 	// defer os.RemoveAll(tmpDir)
+
 	protoFile, err := os.Create(filepath.Join(tmpDir, "nodestream.proto"))
 	if err != nil {
 		log.Fatalf("Failed to create temporary file: %v\n", err)
 	}
 	protoFile.WriteString(mustExecute(parseTemplate("nodestream_proto", nodeStreamProto), file))
-	includePath := filepath.Dir(file.Desc.Path())
-	cmd := exec.Command("protoc", fmt.Sprintf("-I=%s:%s", includePath, tmpDir), fmt.Sprintf("--go_out=%s", tmpDir), protoFile.Name())
+
+	var includeBuilder strings.Builder
+	includeBuilder.WriteString("-I=")
+	includeBuilder.WriteString(filepath.Dir(file.GeneratedFilenamePrefix))
+	includeBuilder.WriteString(":")
+	includeBuilder.WriteString(tmpDir)
+	for _, imp := range fileImports(file) {
+		includeBuilder.WriteString(":")
+		includeBuilder.WriteString(filepath.Dir(imp.Path()))
+	}
+	goPlugin := fmt.Sprintf("--go_out=paths=source_relative:%s", tmpDir)
+	grpcPlugin := fmt.Sprintf("--go-grpc_out=paths=source_relative:%s", tmpDir)
+
+	cmd := exec.Command("protoc", includeBuilder.String(), goPlugin, grpcPlugin, protoFile.Name())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Fatalf("Failed to run protoc: %v\nOutput:\n%s\n", err, out)
 	}
-	genFile, err := os.Open(filepath.Join(tmpDir, "nodestream.pb.go"))
+
+	genGoFile, err := os.Open(filepath.Join(tmpDir, "nodestream.pb.go"))
 	if err != nil {
 		log.Fatalf("Failed to open generated file: %v\n", err)
 	}
-	_, err = io.Copy(g, genFile)
+	_, err = io.Copy(goFile, genGoFile)
+	if err != nil {
+		log.Fatalf("Failed to write generated file: %v\n", err)
+	}
+
+	genGRPCFile, err := os.Open(filepath.Join(tmpDir, "nodestream_grpc.pb.go"))
+	if err != nil {
+		log.Fatalf("Failed to open generated file: %v\n", err)
+	}
+	_, err = io.Copy(grpcFile, genGRPCFile)
 	if err != nil {
 		log.Fatalf("Failed to write generated file: %v\n", err)
 	}
