@@ -9,17 +9,13 @@ import (
 	status "google.golang.org/grpc/status"
 )
 
-// Reference imports to suppress errors if they are not otherwise used.
-var _ context.Context
-var _ grpc.ClientConn
-
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-const _ = grpc.SupportPackageIsVersion4
+const _ = grpc.SupportPackageIsVersion6
 
 // ReaderServiceClient is the client API for ReaderService service.
 //
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ReaderServiceClient interface {
 	ReadGrpc(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	ReadQuorumCall(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
@@ -39,10 +35,10 @@ type ReaderServiceClient interface {
 }
 
 type readerServiceClient struct {
-	cc *grpc.ClientConn
+	cc grpc.ClientConnInterface
 }
 
-func NewReaderServiceClient(cc *grpc.ClientConn) ReaderServiceClient {
+func NewReaderServiceClient(cc grpc.ClientConnInterface) ReaderServiceClient {
 	return &readerServiceClient{cc}
 }
 
@@ -250,6 +246,8 @@ func (x *readerServiceReadOrderedClient) Recv() (*ReadResponse, error) {
 }
 
 // ReaderServiceServer is the server API for ReaderService service.
+// All implementations must embed UnimplementedReaderServiceServer
+// for forward compatibility
 type ReaderServiceServer interface {
 	ReadGrpc(context.Context, *ReadRequest) (*ReadResponse, error)
 	ReadQuorumCall(context.Context, *ReadRequest) (*ReadResponse, error)
@@ -266,9 +264,10 @@ type ReaderServiceServer interface {
 	ReadCorrectable(context.Context, *ReadRequest) (*ReadResponse, error)
 	ReadCorrectableStream(*ReadRequest, ReaderService_ReadCorrectableStreamServer) error
 	ReadOrdered(ReaderService_ReadOrderedServer) error
+	mustEmbedUnimplementedReaderServiceServer()
 }
 
-// UnimplementedReaderServiceServer can be embedded to have forward compatible implementations.
+// UnimplementedReaderServiceServer must be embedded to have forward compatible implementations.
 type UnimplementedReaderServiceServer struct {
 }
 
@@ -308,6 +307,7 @@ func (*UnimplementedReaderServiceServer) ReadCorrectableStream(*ReadRequest, Rea
 func (*UnimplementedReaderServiceServer) ReadOrdered(ReaderService_ReadOrderedServer) error {
 	return status.Errorf(codes.Unimplemented, "method ReadOrdered not implemented")
 }
+func (*UnimplementedReaderServiceServer) mustEmbedUnimplementedReaderServiceServer() {}
 
 func RegisterReaderServiceServer(s *grpc.Server, srv ReaderServiceServer) {
 	s.RegisterService(&_ReaderService_serviceDesc, srv)

@@ -12,6 +12,7 @@ import (
 
 type server struct {
 	stats *Stats
+	UnimplementedBenchmarkServer
 }
 
 func (srv *server) StartServerBenchmark(_ context.Context, req *StartRequest) (resp *StartResponse, _ error) {

@@ -9,17 +9,13 @@ import (
 	status "google.golang.org/grpc/status"
 )
 
-// Reference imports to suppress errors if they are not otherwise used.
-var _ context.Context
-var _ grpc.ClientConn
-
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-const _ = grpc.SupportPackageIsVersion4
+const _ = grpc.SupportPackageIsVersion6
 
 // BenchmarkClient is the client API for Benchmark service.
 //
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BenchmarkClient interface {
 	StartServerBenchmark(ctx context.Context, in *StartRequest, opts ...grpc.CallOption) (*StartResponse, error)
 	StopServerBenchmark(ctx context.Context, in *StopRequest, opts ...grpc.CallOption) (*Result, error)
@@ -33,10 +29,10 @@ type BenchmarkClient interface {
 }
 
 type benchmarkClient struct {
-	cc *grpc.ClientConn
+	cc grpc.ClientConnInterface
 }
 
-func NewBenchmarkClient(cc *grpc.ClientConn) BenchmarkClient {
+func NewBenchmarkClient(cc grpc.ClientConnInterface) BenchmarkClient {
 	return &benchmarkClient{cc}
 }
 
@@ -157,6 +153,8 @@ func (x *benchmarkOrderedSlowServerClient) Recv() (*Echo, error) {
 }
 
 // BenchmarkServer is the server API for Benchmark service.
+// All implementations must embed UnimplementedBenchmarkServer
+// for forward compatibility
 type BenchmarkServer interface {
 	StartServerBenchmark(context.Context, *StartRequest) (*StartResponse, error)
 	StopServerBenchmark(context.Context, *StopRequest) (*Result, error)
@@ -167,9 +165,10 @@ type BenchmarkServer interface {
 	OrderedQC(Benchmark_OrderedQCServer) error
 	UnorderedSlowServer(context.Context, *Echo) (*Echo, error)
 	OrderedSlowServer(Benchmark_OrderedSlowServerServer) error
+	mustEmbedUnimplementedBenchmarkServer()
 }
 
-// UnimplementedBenchmarkServer can be embedded to have forward compatible implementations.
+// UnimplementedBenchmarkServer must be embedded to have forward compatible implementations.
 type UnimplementedBenchmarkServer struct {
 }
 
@@ -197,6 +196,7 @@ func (*UnimplementedBenchmarkServer) UnorderedSlowServer(context.Context, *Echo)
 func (*UnimplementedBenchmarkServer) OrderedSlowServer(Benchmark_OrderedSlowServerServer) error {
 	return status.Errorf(codes.Unimplemented, "method OrderedSlowServer not implemented")
 }
+func (*UnimplementedBenchmarkServer) mustEmbedUnimplementedBenchmarkServer() {}
 
 func RegisterBenchmarkServer(s *grpc.Server, srv BenchmarkServer) {
 	s.RegisterService(&_Benchmark_serviceDesc, srv)
