@@ -51,7 +51,7 @@ func FutureCall(ctx context.Context, d QuorumCallData) *Future {
 				continue
 			}
 		}
-		n.sendQ <- &Message{Metadata: md, Message: msg}
+		n.send(ctx, &Message{Metadata: md, Message: msg})
 	}
 
 	fut := &Future{c: make(chan struct{}, 1)}

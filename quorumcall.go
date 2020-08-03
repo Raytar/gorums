@@ -39,7 +39,7 @@ func QuorumCall(ctx context.Context, d QuorumCallData) (resp protoreflect.ProtoM
 				continue
 			}
 		}
-		n.sendQ <- &Message{Metadata: md, Message: msg}
+		n.send(ctx, &Message{Metadata: md, Message: msg})
 	}
 
 	var (

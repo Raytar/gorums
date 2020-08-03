@@ -64,9 +64,80 @@ func (m *receiveQueue) putResult(id uint64, result *orderingResult) {
 	}
 }
 
+type queueItem struct {
+	ctx  context.Context
+	msg  *Message
+	next *queueItem
+}
+
+type sendQueue struct {
+	mut  sync.Mutex
+	head *queueItem
+	tail *queueItem
+	c    chan *Message
+}
+
+func newSendQueue() *sendQueue {
+	root := &queueItem{}
+	return &sendQueue{
+		head: root,
+		tail: root,
+		c:    make(chan *Message),
+	}
+}
+
+// enqueue either adds the message to the queue, or directly sends it to the consumer
+// if the consumer is waiting.
+func (q *sendQueue) enqueue(ctx context.Context, msg *Message) {
+	q.mut.Lock()
+	defer q.mut.Unlock()
+
+	// check if consumer is waiting
+	select {
+	case q.c <- msg:
+		return
+	default:
+	}
+
+	// consumer is busy; must enqueue
+	item := &queueItem{ctx: ctx, msg: msg}
+	q.tail.next = item
+	q.tail = item
+
+	// remove expired items
+	for item := q.head; item.next != nil; item = item.next {
+		if item.next.ctx.Err() != nil {
+			item.next = item.next.next
+		}
+	}
+}
+
+// dequeue returns a channel from which the next message in the queue can be read.
+// If the queue is not empty, the oldest non-expired item in the queue is returned.
+// If the queue is empty, a channel where the next element can be read is returned.
+func (q *sendQueue) dequeue() <-chan *Message {
+	q.mut.Lock()
+	defer q.mut.Unlock()
+
+	// get the first non-expired item in the queue
+	for item := q.head; item.next != nil; item = item.next {
+		// remove from queue
+		m := item.next
+		item.next = item.next.next
+		if m.ctx.Err() == nil {
+			c := make(chan *Message, 1)
+			c <- m.msg
+			return c
+		}
+	}
+
+	// wait for new item
+	return q.c
+}
+
 type orderedNodeStream struct {
 	*receiveQueue
-	sendQ        chan *Message
+	sendQ        *sendQueue
 	node         *Node // needed for ID and setLastError
 	backoff      backoff.Config
 	rand         *rand.Rand
@@ -74,6 +145,10 @@ type orderedNodeStream struct {
 	gorumsStream ordering.Gorums_NodeStreamClient
 	streamMut    sync.RWMutex
 	streamBroken uint32
+}
+
+func (s *orderedNodeStream) send(ctx context.Context, msg *Message) {
+	s.sendQ.enqueue(ctx, msg)
 }
 
 func (s *orderedNodeStream) connectOrderedStream(ctx context.Context, conn *grpc.ClientConn) error {
@@ -91,10 +166,11 @@ func (s *orderedNodeStream) connectOrderedStream(ctx context.Context, conn *grpc
 func (s *orderedNodeStream) sendMsgs(ctx context.Context) {
 	var req *Message
 	for {
+		c := s.sendQ.dequeue()
 		select {
 		case <-ctx.Done():
 			return
-		case req = <-s.sendQ:
+		case req = <-c:
 		}
 		// return error if stream is broken
 		if atomic.LoadUint32(&s.streamBroken) == 1 {

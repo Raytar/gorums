@@ -100,7 +100,7 @@ func CorrectableCall(ctx context.Context, d CorrectableCallData) *Correctable {
 				continue
 			}
 		}
-		n.sendQ <- &Message{Metadata: md, Message: msg}
+		n.send(ctx, &Message{Metadata: md, Message: msg})
 	}
 
 	corr := &Correctable{donech: make(chan struct{}, 1)}

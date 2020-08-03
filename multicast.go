@@ -11,7 +11,7 @@ func Multicast(ctx context.Context, d QuorumCallData) {
 	// set up channel to collect replies to this call.
 	replyChan := make(chan *orderingResult, len(d.Nodes))
 	d.Manager.putChan(msgID, replyChan)
-	// and remove it when the call it scomplete
+	// and remove it when the call is complete
 	defer d.Manager.deleteChan(msgID)
 
 	md := &ordering.Metadata{
@@ -27,6 +27,6 @@ func Multicast(ctx context.Context, d QuorumCallData) {
 				continue
 			}
 		}
-		n.sendQ <- &Message{Metadata: md, Message: msg}
+		n.send(ctx, &Message{Metadata: md, Message: msg})
 	}
 }
