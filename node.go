@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -15,6 +16,39 @@ import (
 )
 
 const nilAngleString = "<nil>"
+
+type nodeConfig []*Node
+
+func (c nodeConfig) sendMsgs(ctx context.Context, msgs []*Message) {
+	if len(c) != len(msgs) {
+		panic("sendMsgs: number of messages and number of nodes differ")
+	}
+	cases := make([]reflect.SelectCase, 0, len(c)+1)
+	cases = append(cases, reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(ctx.Done()),
+	})
+	expected := len(msgs)
+	for i, node := range c {
+		if msgs[i] == nil {
+			expected--
+			continue
+		}
+		cases = append(cases, reflect.SelectCase{
+			Dir:  reflect.SelectSend,
+			Chan: reflect.ValueOf(node.sendQ),
+			Send: reflect.ValueOf(msgs[i]),
+		})
+	}
+	for i := 0; i < expected; i++ {
+		chosen, _, _ := reflect.Select(cases)
+		if ctx.Err() != nil {
+			break
+		}
+		cases[len(cases)-1], cases[chosen] = cases[chosen], cases[len(cases)-1]
+		cases = cases[:len(cases)-1]
+	}
+}
 
 // Node encapsulates the state of a node on which a remote procedure call
 // can be performed.

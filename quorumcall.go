@@ -30,41 +30,56 @@ func QuorumCall(ctx context.Context, d QuorumCallData) (resp protoreflect.ProtoM
 	}
 
 	expected := len(d.Nodes)
-	for _, n := range d.Nodes {
+	msgs := make([]*Message, len(d.Nodes))
+	for i, n := range d.Nodes {
 		msg := d.Message
 		if d.PerNodeArgFn != nil {
-			nodeArg := d.PerNodeArgFn(d.Message, n.id)
-			if nodeArg != nil {
+			msg = d.PerNodeArgFn(d.Message, n.id)
+			if msg == nil {
 				expected--
 				continue
 			}
 		}
-		n.sendQ <- &Message{Metadata: md, Message: msg}
+		msgs[i] = &Message{Metadata: md, Message: msg}
 	}
 
-	var (
-		errs    []GRPCError
-		quorum  bool
-		replies = make(map[uint32]protoreflect.ProtoMessage)
-	)
+	ctx, cancel := context.WithCancel(ctx)
+	resultChan := make(chan *orderingResult)
 
-	for {
-		select {
-		case r := <-replyChan:
-			if r.err != nil {
-				errs = append(errs, GRPCError{r.nid, r.err})
-				break
+	nodeConfig(d.Nodes).sendMsgs(ctx, msgs)
+
+	go func() {
+		defer cancel()
+		var (
+			errs    []GRPCError
+			quorum  bool
+			replies = make(map[uint32]protoreflect.ProtoMessage)
+		)
+
+		for {
+			select {
+			case r := <-replyChan:
+				if r.err != nil {
+					errs = append(errs, GRPCError{r.nid, r.err})
+					break
+				}
+				reply := r.reply
+				replies[r.nid] = reply
+				if resp, quorum = d.QuorumFunction(d.Message, replies); quorum {
+					resultChan <- &orderingResult{reply: resp, err: nil}
+					return
+				}
+			case <-ctx.Done():
+				resultChan <- &orderingResult{reply: resp, err: QuorumCallError{"incomplete call", len(replies), errs}}
+				return
 			}
-			reply := r.reply
-			replies[r.nid] = reply
-			if resp, quorum = d.QuorumFunction(d.Message, replies); quorum {
-				return resp, nil
+			if len(errs)+len(replies) == expected {
+				resultChan <- &orderingResult{reply: resp, err: QuorumCallError{"incomplete call", len(replies), errs}}
+				return
 			}
-		case <-ctx.Done():
-			return resp, QuorumCallError{"incomplete call", len(replies), errs}
 		}
-		if len(errs)+len(replies) == expected {
-			return resp, QuorumCallError{"incomplete call", len(replies), errs}
-		}
-	}
+	}()
+
+	result := <-resultChan
+	return result.reply, result.err
 }

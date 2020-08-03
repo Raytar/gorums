@@ -14,5 +14,8 @@ func Unicast(ctx context.Context, d CallData) {
 		MethodID:  d.MethodID,
 	}
 
-	d.Node.sendQ <- &Message{Metadata: md, Message: d.Message}
+	select {
+	case d.Node.sendQ <- &Message{Metadata: md, Message: d.Message}:
+	case <-ctx.Done():
+	}
 }

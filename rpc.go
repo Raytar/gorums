@@ -27,7 +27,11 @@ func RPCCall(ctx context.Context, d CallData) (resp protoreflect.ProtoMessage, e
 		MethodID:  d.MethodID,
 	}
 
-	d.Node.sendQ <- &Message{Metadata: md, Message: d.Message}
+	select {
+	case d.Node.sendQ <- &Message{Metadata: md, Message: d.Message}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	select {
 	case r := <-replyChan:
@@ -36,6 +40,6 @@ func RPCCall(ctx context.Context, d CallData) (resp protoreflect.ProtoMessage, e
 		}
 		return r.reply, nil
 	case <-ctx.Done():
-		return resp, ctx.Err()
+		return nil, ctx.Err()
 	}
 }
